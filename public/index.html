@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HisabPro</title>
+  <link rel="icon" type="image/svg+xml" href="/img/logo.svg">
+  <link rel="stylesheet" href="/css/app.css">
+  <script src="/js/core/theme-boot.js"></script>
+</head>
+<body>
+  <div id="app" class="h-full"></div>
+  <div id="overlay-root"></div>
+  <div id="toasts" class="pointer-events-none fixed bottom-6 end-6 z-[200] flex flex-col items-end gap-2" aria-live="polite"></div>
+  <div id="print-root"></div>
+
+  <script src="/vendor/chart.umd.min.js" defer></script>
+  <script src="/vendor/JsBarcode.all.min.js" defer></script>
+  <script src="/vendor/qrcode.js" defer></script>
+  <script src="/js/shared/calc.js" defer></script>
+  <script src="/js/shared/permissions.js" defer></script>
+  <script src="/js/shared/plans.js" defer></script>
+  <script src="/js/shared/access.js" defer></script>
+  <script src="/js/core/html.js" defer></script>
+  <script src="/js/core/icons.js" defer></script>
+  <script src="/js/core/fmt.js" defer></script>
+  <script src="/js/core/i18n-ur.js" defer></script>
+  <script src="/js/core/i18n.js" defer></script>
+  <script src="/js/core/api.js" defer></script>
+  <script src="/js/core/ui.js" defer></script>
+  <script src="/js/core/router.js" defer></script>
+  <script src="/js/core/shell.js" defer></script>
+  <script src="/js/core/print.js" defer></script>
+  <script src="/js/core/whatsapp.js" defer></script>
+  <script src="/js/core/palette.js" defer></script>
+  <script src="/js/core/app.js" defer></script>
+  <!-- every file in public/js/pages, joined by the server (src/routes/pages.js) -->
+  <script src="/js/pages.bundle.js" defer></script>
+</body>
+</html>

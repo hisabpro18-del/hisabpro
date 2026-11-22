@@ -1,0 +1,78 @@
+// HisabPro desktop (Windows) — Electron main process.
+// It runs the same HisabPro server inside the app (MODE=desktop, a SQLite file in the user's AppData folder) on
+// 127.0.0.1, opens it in a window, and the built-in sync worker keeps it in step with the cloud whenever online.
+const { app, BrowserWindow, ipcMain, Menu, shell, dialog } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const net = require('net');
+const crypto = require('crypto');
+
+// tests can point the app at a scratch data folder and keep the window hidden
+if (process.env.HP_USER_DATA) app.setPath('userData', process.env.HP_USER_DATA);
+if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
+
+const userData = app.getPath('userData');
+fs.mkdirSync(userData, { recursive: true });
+const dbFile = path.join(userData, 'hisabpro.db');
+const secretFile = path.join(userData, 'secret.key');
+if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, crypto.randomBytes(48).toString('hex'), { mode: 0o600 });
+const conf = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8')); } catch { return {}; } })();
+
+// everything the server reads from the environment, set before it is loaded
+process.env.MODE = 'desktop';
+process.env.DATABASE_URL = `file:${dbFile.replace(/\\/g, '/')}?connection_limit=1`;
+process.env.JWT_SECRET = fs.readFileSync(secretFile, 'utf8').trim();
+process.env.HP_SERVER_URL = process.env.HP_SERVER_URL || conf.serverUrl || '';
+process.env.DESKTOP_OFFLINE_DAYS = String(conf.offlineDays || 7);
+process.env.NODE_ENV = 'production';
+
+// inside the installed app, Prisma's SQLite engine sits next to the archive (app.asar.unpacked)
+if (app.isPackaged) {
+    const dir = path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'generated', 'sqlite');
+    const engine = fs.existsSync(dir) && fs.readdirSync(dir).find(f => /query_engine.*\.node$/.test(f) && (process.platform !== 'win32' || /windows/.test(f)));
+    if (engine) process.env.PRISMA_QUERY_ENGINE_LIBRARY = path.join(dir, engine);
+}
+
+const freePort = () => new Promise(resolve => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+
+let win = null;
+async function boot() {
+    const port = Number(process.env.HP_PORT) || await freePort();
+    try {
+        const { startServer } = require(path.join(__dirname, '..', 'server.js'));
+        await startServer(port);
+    } catch (e) {
+        dialog.showErrorBox('HisabPro could not start', String(e && e.stack || e));
+        app.quit();
+        return;
+    }
+    win = new BrowserWindow({
+        width: 1440, height: 900, minWidth: 1100, minHeight: 700, show: false, title: 'HisabPro', backgroundColor: '#fafafa',
+        icon: path.join(__dirname, 'icon.png'),
+        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    win.once('ready-to-show', () => { if (process.env.HP_HIDDEN) return; win.maximize(); win.show(); });
+    // links to other sites open in the normal browser, never inside the app
+    win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+    // compared by origin: a prefix test would let http://127.0.0.1:<port>@other.site or port <port>5 load inside the app
+    const own = `http://127.0.0.1:${port}`;
+    const originOf = u => { try { return new URL(u).origin; } catch { return ''; } };
+    win.webContents.on('will-navigate', (e, url) => { if (originOf(url) !== own) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); } });
+    await win.loadURL(`http://127.0.0.1:${port}/`);
+}
+
+// silent printing (Receipt & POS → Auto-Print on Save): straight to the default printer, no dialog
+ipcMain.handle('print-silent', event => new Promise(resolve => {
+    event.sender.print({ silent: true, printBackground: true }, (ok, reason) => resolve({ ok, reason }));
+}));
+ipcMain.handle('app-info', () => ({ version: app.getVersion(), dataFolder: userData }));
+
+Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: 'HisabPro', submenu: [{ role: 'reload' }, { role: 'togglefullscreen' }, { type: 'separator' }, { label: 'Open data folder', click: () => shell.openPath(userData) }, { type: 'separator' }, { role: 'quit' }] },
+    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+    { label: 'View', submenu: [{ role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'resetZoom' }, ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' }])] },
+]));
+
+app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+app.whenReady().then(boot);
+app.on('window-all-closed', () => app.quit());

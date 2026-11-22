@@ -1,0 +1,153 @@
+/* HisabPro design system (Tailwind v4). Build: npm run build:css → public/css/app.css
+   Look follows the reference spec (reference/REFERENCE.md "App shell & design"): warm off-white canvas, white cards with
+   hairline borders, warm-grey primary buttons, indigo accent, green/red/amber money colours. Every colour is a CSS
+   variable, so night mode and the theme palette only swap variables. */
+@import "tailwindcss";
+@source "../public";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "HP Urdu", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-primary: #83837d;          /* theme palette (warm grey) */
+  --color-primary-hover: #6f6f69;
+  --color-primary-fg: #ffffff;
+  --color-accent: #4f46e5;           /* indigo-600: nav state, totals */
+  --color-accent-soft: #eef2ff;
+  --color-canvas: #fafafa;
+  --color-topbar: #f1f1ef;
+  --color-surface: #ffffff;
+  --color-surface-2: #f9fafb;
+  --color-line: #e5e7eb;
+  --color-line-soft: #f1f5f9;
+  --color-ink: #1a1a1a;
+  --color-muted: #6b7280;
+  --color-faint: #9ca3af;
+  --color-good: #059669;
+  --color-good-soft: #ecfdf5;
+  --color-bad: #dc2626;
+  --color-bad-soft: #fef2f2;
+  --color-warn: #b45309;
+  --color-warn-soft: #fffbeb;
+}
+
+.dark {
+  --color-canvas: #0f1115;
+  --color-topbar: #15181d;
+  --color-surface: #171a20;
+  --color-surface-2: #1d2128;
+  --color-line: #2a2f38;
+  --color-line-soft: #232831;
+  --color-ink: #e8e8e6;
+  --color-muted: #9aa1ad;
+  --color-faint: #6b7280;
+  --color-accent-soft: #23234a;
+  --color-good-soft: #0f2a22;
+  --color-bad-soft: #2d1616;
+  --color-warn-soft: #2b2312;
+  color-scheme: dark;
+}
+
+@font-face { font-family: "HP Urdu"; src: url("/vendor/fonts/naskh-400.woff2") format("woff2"); font-weight: 400; font-display: swap; unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+200C-200F; }
+@font-face { font-family: "HP Urdu"; src: url("/vendor/fonts/naskh-600.woff2") format("woff2"); font-weight: 500 600; font-display: swap; unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+200C-200F; }
+@font-face { font-family: "HP Urdu"; src: url("/vendor/fonts/naskh-700.woff2") format("woff2"); font-weight: 700 800; font-display: swap; unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF, U+200C-200F; }
+html, body { height: 100%; }
+body { @apply bg-canvas text-ink font-sans antialiased; font-size: 14px; }
+[dir="rtl"] body { font-family: "HP Urdu", var(--font-sans); line-height: 1.6; }
+[dir="rtl"] .tbl thead th, [dir="rtl"] .eyebrow, [dir="rtl"] .label { letter-spacing: 0; }
+[dir="rtl"] .tbl thead th { text-align: right; }
+
+@layer components {
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 h-9 text-sm font-medium transition-colors select-none whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer; }
+  .btn-sm { @apply h-8 px-2.5 text-xs; }
+  .btn-lg { @apply h-12 px-5 text-base; }
+  .btn-primary { @apply bg-primary text-primary-fg hover:bg-primary-hover; }
+  .btn-outline { @apply bg-surface text-ink border border-line hover:bg-surface-2; }
+  .btn-ghost { @apply text-muted hover:bg-surface-2 hover:text-ink; }
+  .btn-danger { @apply bg-rose-600 text-white hover:bg-rose-700; }
+  .btn-accent { @apply bg-accent text-white hover:opacity-90; }
+  .btn-icon { @apply inline-flex items-center justify-center w-9 h-9 rounded-lg border border-line bg-surface text-muted hover:text-ink hover:bg-surface-2 cursor-pointer; }
+
+  .card { @apply bg-surface border border-line rounded-xl; }
+  .card-pad { @apply p-5; }
+  .eyebrow { @apply text-[11px] font-semibold uppercase tracking-wider text-muted; }
+
+  .label { @apply block mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted; }
+  .input { @apply w-full h-10 rounded-lg border border-line bg-surface px-3 text-sm text-ink outline-none transition placeholder:text-faint focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-surface-2 disabled:text-muted; }
+  textarea.input { @apply h-auto py-2 min-h-[72px]; }
+  select.input { @apply pr-8; }
+  .help { @apply mt-1 text-xs text-muted; }
+  .check { @apply w-4 h-4 rounded border-line accent-[var(--color-primary)]; }
+
+  .tbl { @apply w-full text-sm; }
+  .tbl thead th { @apply bg-surface-2 text-left text-[11px] font-semibold uppercase tracking-wider text-faint px-4 py-3 border-b border-line whitespace-nowrap; }
+  .tbl tbody td { @apply px-4 py-3 border-b border-line-soft align-middle; }
+  .tbl tbody tr:last-child td { @apply border-b-0; }
+  .tbl tbody tr:hover td { @apply bg-surface-2/60; }
+  .tbl .num { @apply text-right tabular-nums; }
+
+  .badge { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium border; }
+  .badge-dot::before { content: ""; @apply w-1.5 h-1.5 rounded-full bg-current; }
+  .badge-good { @apply bg-good-soft text-good border-emerald-200 dark:border-emerald-900; }
+  .badge-bad { @apply bg-bad-soft text-bad border-red-200 dark:border-red-900; }
+  .badge-warn { @apply bg-warn-soft text-warn border-amber-200 dark:border-amber-900; }
+  .badge-gray { @apply bg-surface-2 text-muted border-line; }
+  .badge-accent { @apply bg-accent-soft text-accent border-indigo-200 dark:border-indigo-900; }
+
+  .chip { @apply inline-flex items-center rounded-full border border-line bg-surface px-3 h-8 text-xs font-medium uppercase text-ink hover:bg-surface-2 cursor-pointer whitespace-nowrap; }
+  .chip-on { @apply bg-primary border-primary text-primary-fg hover:bg-primary-hover; }
+
+  .seg { @apply inline-flex max-w-full overflow-x-auto rounded-lg border border-line bg-surface-2 p-0.5; } /* many options on a phone: scroll, never push the page wider */
+  .seg > button { @apply shrink-0 px-3 h-8 rounded-md text-xs font-medium text-muted cursor-pointer whitespace-nowrap; }
+  .seg > button.on { @apply bg-primary text-primary-fg shadow-sm; }
+
+  .tabs { @apply flex gap-6 border-b border-line; }
+  .tabs > button { @apply -mb-px py-2.5 text-sm font-medium text-muted border-b-2 border-transparent cursor-pointer whitespace-nowrap; }
+  .tabs > button.on { @apply text-accent border-accent; }
+
+  .kbd { @apply inline-flex items-center rounded border border-line bg-surface-2 px-1.5 text-[10px] font-semibold text-muted; }
+  .switch { @apply relative inline-flex h-5 w-9 shrink-0 items-center rounded-full bg-line transition cursor-pointer; }
+  .switch.on { @apply bg-good; }
+  .switch::after { content: ""; @apply absolute left-0.5 h-4 w-4 rounded-full bg-white shadow transition; }
+  .switch.on::after { transform: translateX(16px); }
+
+  .money-good { @apply text-good; }
+  .money-bad { @apply text-bad; }
+  .money-warn { @apply text-warn; }
+
+  .nav-item { @apply flex items-center gap-3 rounded-lg px-3 h-10 text-sm text-ink/80 hover:bg-surface-2 cursor-pointer; }
+  .nav-item.on { @apply bg-accent-soft text-accent font-semibold; box-shadow: inset 3px 0 0 var(--color-accent); }
+  .nav-group { @apply flex w-full items-center gap-3 rounded-lg px-3 h-11 text-sm font-semibold text-ink hover:bg-surface-2 cursor-pointer; }
+  .nav-sub { @apply flex items-center gap-3 rounded-lg ps-5 pe-3 h-9 text-[13px] text-ink/75 hover:bg-surface-2 cursor-pointer; }
+  .nav-sub.on { @apply text-accent font-semibold bg-accent-soft; }
+
+  .scrim { @apply fixed inset-0 z-[100] bg-black/30 backdrop-blur-[2px]; }
+  .drawer { @apply fixed inset-y-0 end-0 z-[110] flex w-full max-w-[460px] flex-col bg-surface shadow-2xl; }
+  .drawer-wide { max-width: 640px; }
+  .modal { @apply fixed left-1/2 top-1/2 z-[110] w-[calc(100%-32px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-surface shadow-2xl max-h-[calc(100vh-48px)] flex flex-col; }
+  .popover { @apply absolute z-[120] rounded-xl border border-line bg-surface shadow-xl; }
+}
+
+/* printing: only the print root is printed (receipts, invoices, reports, labels) */
+#print-root { display: none; }
+@media print {
+  body > *:not(#print-root) { display: none !important; }
+  #print-root { display: block !important; }
+  @page { margin: 6mm; }
+}
+.receipt { font-family: var(--font-mono); color: #000; background: #fff; font-size: 12px; line-height: 1.35; }
+.receipt.w58 { width: 54mm; }
+.receipt.w80 { width: 72mm; }
+.receipt.a4 { width: 100%; max-width: 190mm; font-family: var(--font-sans); font-size: 12px; }
+.receipt hr { border: 0; border-top: 1px dashed #000; margin: 6px 0; }
+
+/* scrollbar */
+.thin-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.thin-scroll::-webkit-scrollbar-thumb { background: var(--color-line); border-radius: 8px; }
+@keyframes hp-spin { to { transform: rotate(360deg); } }
+.spin { animation: hp-spin 0.8s linear infinite; }
+@keyframes hp-slide { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.slide-in { animation: hp-slide 0.18s ease-out; }
+[dir="rtl"] .slide-in { animation-name: none; }

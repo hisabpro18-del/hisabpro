@@ -1,0 +1,14 @@
+node_modules/
+.env
+.DS_Store
+public/css/app.css
+public/vendor/
+src/generated/
+prisma/sqlite/
+desktop/schema.sql
+dist-desktop/
+data/
+test-results/
+
+# screenshots of the reference app (contain shop data) — keep local only
+reference/khatapos/

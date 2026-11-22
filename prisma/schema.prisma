@@ -1,0 +1,994 @@
+// HisabPro database. Postgres in the cloud; the desktop app uses a generated SQLite copy (scripts/gen-sqlite.js).
+//
+// SYNC RULES (see PLAN.md §5) — every business table:
+//   - id is a UUID made where the row is created (server or a PC), so two places never make the same id
+//   - tenantId on every row; createdAt / updatedAt set by the app (src/db.js) and kept as sent when synced
+//   - nothing is hard-deleted: deletedAt marks a removed row
+//   - no unique constraints on business fields (two offline PCs could both create "SKU-1"): uniqueness is checked by the app
+//   - money is BigInt paisa (Rs 1 = 100), quantities are Float in the product's base unit, rounded to 3 decimals
+// Postgres triggers (migration 0002) write every insert/update of a synced table to ChangeLog; PCs pull from it.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native"]
+}
+
+datasource db {
+  provider     = "postgresql"
+  url          = env("DATABASE_URL")
+  relationMode = "prisma"
+}
+
+// ───────────────────────────── platform ─────────────────────────────
+
+model Tenant {
+  id             String    @id @default(uuid())
+  name           String // business (shop) name, e.g. "Minha traders": shown in the app and on bills
+  mobile         String    @default("")
+  active         Boolean   @default(true)
+  inactiveReason String? // ADMIN (switched off) or EXPIRED (access period over)
+  plan           String? // starter | pro | enterprise (public/js/shared/plans.js); null = no limits
+  accessUnit     String? // MONTH | YEAR
+  accessCount    Int?
+  accessEndsAt   DateTime? // last day of access (00:00 Pakistan time); null = no limit
+  integratedAt   DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now())
+  deletedAt      DateTime?
+}
+
+model User {
+  id                 String    @id @default(uuid())
+  tenantId           String? // null for the super admin
+  email              String    @unique
+  name               String    @default("")
+  passwordHash       String
+  role               String // SUPER_ADMIN | OWNER | MANAGER | CASHIER
+  permissions        String    @default("[]") // JSON array of permission keys (public/js/shared/permissions.js)
+  active             Boolean   @default(true)
+  tokenVersion       Int       @default(0) // bump = signed out everywhere
+  mustChangePassword Boolean   @default(false)
+  failedLogins       Int       @default(0)
+  lockedUntil        DateTime?
+  lastLoginAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @default(now())
+  deletedAt          DateTime?
+
+  @@index([tenantId])
+}
+
+// A Windows PC running the desktop app (server only)
+model Device {
+  id          String    @id @default(uuid())
+  tenantId    String
+  name        String
+  code        String // short code used in its invoice numbers, e.g. D1
+  tokenHash   String
+  activatedBy String    @default("")
+  appVersion  String    @default("")
+  lastSeenAt  DateTime?
+  lastPushAt  DateTime?
+  lastPullAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+// Every insert/update of a synced table (written by a database trigger; server only)
+model ChangeLog {
+  seq      BigInt   @id @default(autoincrement())
+  tenantId String
+  tbl      String
+  rowId    String
+  deviceId String? // the PC whose push made this change (it does not need it back)
+  at       DateTime @default(now())
+
+  @@index([tenantId, seq])
+}
+
+// Running numbers (invoice, purchase …). Each server and each PC keeps its own; never synced.
+model Counter {
+  id       String @id // `${tenantId}:${key}`
+  tenantId String
+  key      String
+  value    Int    @default(0)
+}
+
+// Append-only activity log (PCs push theirs up)
+model AuditLog {
+  id        String    @id @default(uuid())
+  tenantId  String?
+  userId    String?
+  userEmail String    @default("")
+  action    String
+  summary   String
+  details   String? // JSON
+  ip        String    @default("")
+  deviceId  String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId, createdAt])
+}
+
+// Key/value settings per client. id = `${tenantId}:${key}` so every PC edits the same row.
+// keys: company, receipt, localization, numbering, pos, financialSetup
+model Setting {
+  id        String    @id
+  tenantId  String
+  key       String
+  value     String // JSON
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+// ───────────────────────────── inventory ─────────────────────────────
+
+model Category {
+  id          String    @id @default(uuid())
+  tenantId    String
+  name        String
+  parentId    String?
+  description String    @default("")
+  color       String    @default("")
+  imageUrl    String    @default("")
+  sortOrder   Int       @default(0)
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([tenantId])
+}
+
+model Brand {
+  id          String    @id @default(uuid())
+  tenantId    String
+  name        String
+  description String    @default("")
+  active      Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([tenantId])
+}
+
+model Unit {
+  id        String    @id @default(uuid())
+  tenantId  String
+  name      String
+  shortCode String
+  isBase    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+model Color {
+  id        String    @id @default(uuid())
+  tenantId  String
+  name      String
+  hex       String    @default("#000000")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+model Size {
+  id        String    @id @default(uuid())
+  tenantId  String
+  name      String
+  sortOrder Int       @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+// A sellable item. Type VARIANT is a parent that is not sold itself: each colour × size is its own Product row
+// with parentId set (own SKU, barcode, price and stock), so the POS, stock and reports treat every row the same.
+model Product {
+  id             String    @id @default(uuid())
+  tenantId       String
+  type           String    @default("STANDARD") // STANDARD | VARIANT | SERIAL | SERVICE
+  name           String
+  formula        String    @default("") // formula / generic name (pharmacy)
+  sku            String    @default("")
+  barcode        String    @default("")
+  categoryId     String?
+  brandId        String?
+  parentId       String? // variant child → its VARIANT parent
+  colorId        String?
+  sizeId         String?
+  variantLabel   String    @default("") // "Black / M"
+  imageUrl       String    @default("") // https URL or a small data: URL
+  active         Boolean   @default(true)
+  retailPrice    BigInt    @default(0) // paisa per 1 base unit
+  wholesalePrice BigInt? // paisa per 1 base unit
+  cost           BigInt    @default(0) // paisa per 1 base unit (weighted average, updated by purchases)
+  taxRate        Float     @default(0) // percent; 0 = use the POS default tax
+  baseUnitId     String?
+  altUnits       String    @default("[]") // JSON [{unitId, factor, price}] factor = how many of this unit in 1 base unit
+  reorderLevel   Float     @default(10)
+  expiryDate     DateTime?
+  weighed        Boolean   @default(false) // POS asks for an amount (or weight) instead of adding 1
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now())
+  deletedAt      DateTime?
+
+  @@index([tenantId])
+  @@index([tenantId, barcode])
+}
+
+// Serial / IMEI of one unit of a SERIAL product
+model ProductSerial {
+  id         String    @id @default(uuid())
+  tenantId   String
+  productId  String
+  serial     String
+  status     String    @default("IN_STOCK") // IN_STOCK | SOLD | RETURNED_TO_VENDOR
+  purchaseId String?
+  saleId     String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  @@index([tenantId, productId])
+}
+
+// Stock is never stored: it is the sum of these rows (so movements from two offline PCs simply add up)
+model StockMovement {
+  id        String    @id @default(uuid())
+  tenantId  String
+  productId String
+  qty       Float // + in / − out, base units
+  type      String // OPENING | PURCHASE | SALE | SALE_RETURN | PURCHASE_RETURN | ADJUSTMENT
+  unitCost  BigInt    @default(0) // paisa per base unit (valuation of this movement)
+  refId     String?
+  refNo     String    @default("")
+  note      String    @default("")
+  date      DateTime  @default(now())
+  userId    String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId, productId])
+  @@index([tenantId, date])
+}
+
+// ───────────────────────────── parties & ledgers ─────────────────────────────
+
+// Customers and vendors share one table (type)
+model Party {
+  id            String    @id @default(uuid())
+  tenantId      String
+  type          String // CUSTOMER | VENDOR
+  name          String // customer name / vendor company name
+  contactPerson String    @default("")
+  phone         String    @default("")
+  email         String    @default("")
+  group         String    @default("RETAIL") // RETAIL | WHOLESALE | VIP (customers)
+  taxId         String    @default("")
+  creditLimit   BigInt    @default(0) // paisa; 0 = unlimited
+  paymentTerms  String    @default("NET_30") // vendors
+  notes         String    @default("") // cashier notes (customer) / internal notes (vendor)
+  address       String    @default("")
+  city          String    @default("")
+  bankDetails   String    @default("")
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now())
+  deletedAt     DateTime?
+
+  @@index([tenantId, type])
+}
+
+// Khata: a customer's balance = Σ(debit − credit) (they owe us); a vendor's = Σ(credit − debit) (we owe them)
+model LedgerEntry {
+  id        String    @id @default(uuid())
+  tenantId  String
+  partyId   String
+  date      DateTime  @default(now())
+  type      String // OPENING | SALE | SALE_RETURN | PURCHASE | PURCHASE_RETURN | PAYMENT_IN | PAYMENT_OUT | CHEQUE | ADJUSTMENT
+  debit     BigInt    @default(0)
+  credit    BigInt    @default(0)
+  refId     String?
+  refNo     String    @default("")
+  note      String    @default("")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId, partyId])
+}
+
+// ───────────────────────────── treasury ─────────────────────────────
+
+model Account {
+  id        String    @id @default(uuid())
+  tenantId  String
+  name      String
+  type      String    @default("BANK") // CASH | BANK | WALLET
+  bankName  String    @default("")
+  accountNo String    @default("")
+  isDefault Boolean   @default(false) // default for its type (Cash in Hand is the default CASH account)
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+// Balance of an account = Σ amount
+model AccountTxn {
+  id        String    @id @default(uuid())
+  tenantId  String
+  accountId String
+  date      DateTime  @default(now())
+  type      String // OPENING | SALE | SALE_RETURN | PURCHASE | PURCHASE_RETURN | PAYMENT_IN | PAYMENT_OUT | EXPENSE | TRANSFER_IN | TRANSFER_OUT | CAPITAL_IN | DRAWING | CHEQUE | PAYROLL | ADVANCE
+  amount    BigInt // + money in, − money out
+  partyId   String?
+  refId     String?
+  refNo     String    @default("")
+  note      String    @default("")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId, accountId])
+  @@index([tenantId, date])
+}
+
+// ───────────────────────────── sales ─────────────────────────────
+
+model Sale {
+  id            String       @id @default(uuid())
+  tenantId      String
+  number        String
+  date          DateTime     @default(now())
+  status        String       @default("COMPLETED") // COMPLETED | DUE | PARTIAL_REFUND | REFUNDED
+  mode          String       @default("WALKIN") // WALKIN | CREDIT
+  priceMode     String       @default("RETAIL") // RETAIL | WHOLESALE
+  customerId    String?
+  customerName  String       @default("Walk-in Customer")
+  subtotal      BigInt       @default(0)
+  discountType  String       @default("AMOUNT") // AMOUNT | PERCENT
+  discountValue Float        @default(0)
+  discount      BigInt       @default(0)
+  tax           BigInt       @default(0)
+  total         BigInt       @default(0)
+  paid          BigInt       @default(0) // kept (after change was given back)
+  tendered      BigInt       @default(0) // what the customer handed over
+  change        BigInt       @default(0)
+  due           BigInt       @default(0)
+  returnedTotal BigInt       @default(0)
+  costTotal     BigInt       @default(0) // cost of goods at the time of sale
+  itemsCount    Int          @default(0)
+  note          String       @default("")
+  cashierId     String?
+  cashierName   String       @default("")
+  deviceId      String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @default(now())
+  deletedAt     DateTime?
+  items         SaleItem[]
+  payments      SalePayment[]
+
+  @@index([tenantId, date])
+  @@index([tenantId, number])
+}
+
+model SaleItem {
+  id           String    @id @default(uuid())
+  tenantId     String
+  saleId       String
+  sale         Sale      @relation(fields: [saleId], references: [id])
+  productId    String
+  name         String
+  variantLabel String    @default("")
+  unitId       String?
+  unitName     String    @default("")
+  factor       Float     @default(1) // sale units in 1 base unit
+  qty          Float // in the sale unit
+  baseQty      Float // qty / factor
+  price        BigInt // paisa per sale unit
+  mrp          BigInt    @default(0)
+  gross        BigInt // qty × price
+  discount     BigInt    @default(0) // line discount + its share of the bill discount
+  taxRate      Float     @default(0)
+  tax          BigInt    @default(0)
+  total        BigInt // gross − discount + tax
+  cost         BigInt    @default(0) // paisa per base unit at sale time
+  serial       String    @default("")
+  returnedQty  Float     @default(0)
+  note         String    @default("")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([tenantId, saleId])
+  @@index([saleId])
+}
+
+model SalePayment {
+  id        String    @id @default(uuid())
+  tenantId  String
+  saleId    String
+  sale      Sale      @relation(fields: [saleId], references: [id])
+  method    String // CASH | CARD | BANK
+  amount    BigInt
+  accountId String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId, saleId])
+  @@index([saleId])
+}
+
+// A parked cart (Hold / View Held Sales)
+model HeldSale {
+  id        String    @id @default(uuid())
+  tenantId  String
+  label     String    @default("")
+  cart      String // JSON of the POS cart
+  total     BigInt    @default(0)
+  userId    String?
+  userName  String    @default("")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+model SaleReturn {
+  id           String           @id @default(uuid())
+  tenantId     String
+  number       String
+  date         DateTime         @default(now())
+  saleId       String
+  saleNumber   String
+  customerId   String?
+  customerName String           @default("")
+  total        BigInt // refund incl. tax
+  tax          BigInt           @default(0)
+  refundMethod String           @default("CASH") // CASH | CREDIT (reduces the customer's khata)
+  accountId    String?
+  reason       String           @default("")
+  userId       String?
+  userName     String           @default("")
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @default(now())
+  deletedAt    DateTime?
+  items        SaleReturnItem[]
+
+  @@index([tenantId, date])
+}
+
+model SaleReturnItem {
+  id         String     @id @default(uuid())
+  tenantId   String
+  returnId   String
+  ret        SaleReturn @relation(fields: [returnId], references: [id])
+  saleItemId String
+  productId  String
+  name       String
+  qty        Float // sale units
+  baseQty    Float
+  price      BigInt
+  total      BigInt // incl. tax
+  tax        BigInt     @default(0)
+  cost       BigInt     @default(0) // per base unit
+  restock    Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @default(now())
+  deletedAt  DateTime?
+
+  @@index([tenantId, returnId])
+  @@index([returnId])
+}
+
+// ───────────────────────────── purchases ─────────────────────────────
+
+model Purchase {
+  id            String         @id @default(uuid())
+  tenantId      String
+  number        String
+  date          DateTime       @default(now())
+  vendorId      String
+  vendorName    String         @default("")
+  subtotal      BigInt         @default(0)
+  discountType  String         @default("AMOUNT")
+  discountValue Float          @default(0)
+  discount      BigInt         @default(0)
+  taxRate       Float          @default(0)
+  tax           BigInt         @default(0)
+  total         BigInt         @default(0)
+  paid          BigInt         @default(0)
+  due           BigInt         @default(0)
+  returnedTotal BigInt         @default(0)
+  paymentMethod String         @default("CASH")
+  accountId     String?
+  status        String         @default("DUE") // PAID | PARTIAL | DUE | RETURNED
+  note          String         @default("")
+  userId        String?
+  userName      String         @default("")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @default(now())
+  deletedAt     DateTime?
+  items         PurchaseItem[]
+
+  @@index([tenantId, date])
+}
+
+model PurchaseItem {
+  id          String    @id @default(uuid())
+  tenantId    String
+  purchaseId  String
+  purchase    Purchase  @relation(fields: [purchaseId], references: [id])
+  productId   String
+  name        String
+  unitId      String?
+  unitName    String    @default("")
+  factor      Float     @default(1)
+  qty         Float
+  baseQty     Float
+  cost        BigInt // paisa per purchase unit
+  total       BigInt
+  returnedQty Float     @default(0)
+  serials     String    @default("") // newline-separated (SERIAL products)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([tenantId, purchaseId])
+  @@index([purchaseId])
+}
+
+model PurchaseReturn {
+  id             String               @id @default(uuid())
+  tenantId       String
+  number         String
+  date           DateTime             @default(now())
+  purchaseId     String
+  purchaseNumber String
+  vendorId       String
+  vendorName     String               @default("")
+  total          BigInt
+  settlement     String               @default("CREDIT") // CREDIT (reduces payable) | CASH (vendor refunds)
+  accountId      String?
+  reason         String               @default("")
+  userId         String?
+  userName       String               @default("")
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @default(now())
+  deletedAt      DateTime?
+  items          PurchaseReturnItem[]
+
+  @@index([tenantId, date])
+}
+
+model PurchaseReturnItem {
+  id             String         @id @default(uuid())
+  tenantId       String
+  returnId       String
+  ret            PurchaseReturn @relation(fields: [returnId], references: [id])
+  purchaseItemId String
+  productId      String
+  name           String
+  qty            Float
+  baseQty        Float
+  cost           BigInt
+  total          BigInt
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @default(now())
+  deletedAt      DateTime?
+
+  @@index([tenantId, returnId])
+  @@index([returnId])
+}
+
+// ───────────────────────────── finance ─────────────────────────────
+
+// Payments In (from customers / others) and Out (to vendors / others)
+model Payment {
+  id        String    @id @default(uuid())
+  tenantId  String
+  number    String
+  date      DateTime  @default(now())
+  direction String // IN | OUT
+  partyId   String?
+  partyName String    @default("")
+  amount    BigInt
+  method    String    @default("CASH") // CASH | BANK | CARD | WALLET
+  accountId String
+  reference String    @default("")
+  note      String    @default("")
+  userId    String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId, date])
+}
+
+model ExpenseCategory {
+  id        String    @id @default(uuid())
+  tenantId  String
+  name      String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+model Expense {
+  id           String    @id @default(uuid())
+  tenantId     String
+  date         DateTime  @default(now())
+  categoryId   String?
+  categoryName String    @default("")
+  amount       BigInt
+  accountId    String
+  method       String    @default("CASH")
+  payee        String    @default("")
+  reference    String    @default("")
+  note         String    @default("")
+  source       String    @default("") // '' = entered on Expenses; PAYROLL = a paid payslip (cannot be deleted here)
+  refId        String? // the payslip (or other document) behind it
+  userId       String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([tenantId, date])
+}
+
+model Cheque {
+  id        String    @id @default(uuid())
+  tenantId  String
+  type      String // RECEIVED | ISSUED
+  partyId   String?
+  partyName String    @default("")
+  chequeNo  String
+  bankName  String    @default("")
+  amount    BigInt
+  issueDate DateTime  @default(now())
+  dueDate   DateTime
+  status    String    @default("PENDING") // PENDING | CLEARED | BOUNCED | CANCELLED
+  accountId String? // the bank it clears into / from
+  clearedAt DateTime?
+  note      String    @default("")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+model CapitalTxn {
+  id        String    @id @default(uuid())
+  tenantId  String
+  date      DateTime  @default(now())
+  type      String // SETUP | INJECTION | DRAWING | DIVIDEND
+  amount    BigInt // always positive; type decides the sign
+  accountId String
+  reference String    @default("")
+  note      String    @default("")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+model Tax {
+  id        String    @id @default(uuid())
+  tenantId  String
+  name      String
+  rate      Float // percent
+  combine   Boolean   @default(false) // compound: applied on top of the other taxes
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId])
+}
+
+// ───────────────────────────── HRM & payroll ─────────────────────────────
+
+model Employee {
+  id           String    @id @default(uuid())
+  tenantId     String
+  code         String // EMP-0001
+  name         String
+  cnic         String    @default("")
+  phone        String    @default("")
+  address      String    @default("")
+  dob          DateTime?
+  gender       String    @default("Male")
+  branch       String    @default("Head Office")
+  department   String    @default("Sales")
+  designation  String    @default("")
+  joinDate     DateTime  @default(now())
+  shiftId      String?
+  status       String    @default("ACTIVE") // ACTIVE | INACTIVE
+  baseSalary   BigInt    @default(0)
+  bankName     String    @default("")
+  iban         String    @default("")
+  taxStatus    String    @default("Registered — NTN on file")
+  documents    String    @default("[]") // JSON [{kind, name, dataUrl}]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([tenantId])
+}
+
+model Shift {
+  id          String    @id @default(uuid())
+  tenantId    String
+  name        String
+  startTime   String // "09:00"
+  endTime     String // "17:00"
+  graceMinutes Int      @default(15)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([tenantId])
+}
+
+model Attendance {
+  id         String    @id @default(uuid())
+  tenantId   String
+  employeeId String
+  date       String // YYYY-MM-DD (shop calendar day)
+  shiftId    String?
+  checkIn    String    @default("") // "09:05"
+  checkOut   String    @default("")
+  status     String    @default("PRESENT") // PRESENT | LATE | ABSENT | HALF_DAY | LEAVE
+  hours      Float     @default(0)
+  note       String    @default("")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  @@index([tenantId, date])
+}
+
+model LeaveRequest {
+  id         String    @id @default(uuid())
+  tenantId   String
+  employeeId String
+  type       String    @default("Casual") // Casual | Sick | Annual
+  fromDate   String
+  toDate     String
+  days       Float     @default(1)
+  reason     String    @default("")
+  status     String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  decidedBy  String    @default("")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  @@index([tenantId])
+}
+
+// One employee's salary for one month
+model Payslip {
+  id          String    @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  month       String // YYYY-MM
+  basic       BigInt
+  allowances  BigInt    @default(0)
+  deductions  BigInt    @default(0)
+  advanceCut  BigInt    @default(0) // advance recovered this month
+  net         BigInt
+  status      String    @default("DRAFT") // DRAFT | PAID
+  accountId   String?
+  paidAt      DateTime?
+  note        String    @default("")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([tenantId, month])
+}
+
+model Advance {
+  id             String    @id @default(uuid())
+  tenantId       String
+  employeeId     String
+  amount         BigInt
+  date           DateTime  @default(now())
+  deductionMonth String // YYYY-MM: recovered from this month's payslip
+  accountId      String
+  note           String    @default("")
+  recovered      BigInt    @default(0)
+  status         String    @default("OPEN") // OPEN | RECOVERED
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now())
+  deletedAt      DateTime?
+
+  @@index([tenantId])
+}
+
+model JobPosting {
+  id         String    @id @default(uuid())
+  tenantId   String
+  title      String
+  department String    @default("Sales")
+  openings   Int       @default(1)
+  status     String    @default("OPEN") // OPEN | CLOSED
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  @@index([tenantId])
+}
+
+model Candidate {
+  id          String    @id @default(uuid())
+  tenantId    String
+  name        String
+  phone       String
+  postingId   String?
+  position    String
+  stage       String    @default("APPLIED") // APPLIED | SCREENING | INTERVIEW | OFFER | HIRED | REJECTED
+  appliedDate DateTime  @default(now())
+  resume      String    @default("") // small data: URL
+  note        String    @default("")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([tenantId])
+}
+
+model Appraisal {
+  id         String    @id @default(uuid())
+  tenantId   String
+  employeeId String
+  period     String // YYYY-MM
+  rating     Float     @default(4)
+  feedback   String    @default("")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  @@index([tenantId])
+}
+
+// Warnings and rewards
+model Disciplinary {
+  id          String    @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  kind        String // WARNING | REWARD
+  date        DateTime  @default(now())
+  title       String
+  description String    @default("")
+  amount      BigInt    @default(0) // reward bonus
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([tenantId])
+}
+
+model AssetAssignment {
+  id         String    @id @default(uuid())
+  tenantId   String
+  name       String
+  code       String    @default("")
+  category   String    @default("Laptop")
+  employeeId String
+  issueDate  DateTime  @default(now())
+  returnDate DateTime?
+  status     String    @default("IN_USE") // IN_USE | RETURNED | DAMAGED
+  note       String    @default("")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  @@index([tenantId])
+}
+
+// ───────────────────────────── khata recovery, messages, day close ─────────────────────────────
+
+// A customer's promise to pay (وعدہ): amount by a date. Reminders are sent on WhatsApp (one click) or SMS (automatic).
+model PaymentPromise {
+  id           String    @id @default(uuid())
+  tenantId     String
+  partyId      String
+  amount       BigInt // paisa promised
+  promisedDate String // YYYY-MM-DD (shop calendar day)
+  note         String    @default("")
+  status       String    @default("PENDING") // PENDING | KEPT | BROKEN | CANCELLED
+  remindedAt   DateTime?
+  remindCount  Int       @default(0)
+  lastAutoDay  String    @default("") // the day an automatic SMS was last sent (at most one a day)
+  keptAt       DateTime?
+  createdById  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([tenantId, status])
+}
+
+// Every reminder / receipt message sent or opened (WhatsApp click-to-send or SMS gateway)
+model MessageLog {
+  id        String    @id @default(uuid())
+  tenantId  String
+  partyId   String?
+  channel   String // WHATSAPP | SMS
+  kind      String // PROMISE_REMINDER | BALANCE_REMINDER | PAYMENT_THANKS | RECEIPT | STATEMENT | CUSTOM
+  to        String    @default("")
+  body      String
+  status    String    @default("OPENED") // OPENED (WhatsApp chat opened) | SENT | FAILED | LOGGED (test mode)
+  provider  String    @default("")
+  error     String    @default("")
+  refId     String?
+  userId    String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@index([tenantId, createdAt])
+}
+
+// End of day: what the drawer should hold vs what was counted
+model DayClose {
+  id           String    @id @default(uuid())
+  tenantId     String
+  day          String // YYYY-MM-DD
+  accountId    String // the cash account counted
+  openingCash  BigInt    @default(0)
+  cashIn       BigInt    @default(0)
+  cashOut      BigInt    @default(0)
+  expected     BigInt    @default(0)
+  counted      BigInt    @default(0)
+  difference   BigInt    @default(0) // counted − expected
+  salesTotal   BigInt    @default(0)
+  salesCount   Int       @default(0)
+  summary      String    @default("{}") // JSON breakdown printed on the Z-report
+  note         String    @default("")
+  userId       String?
+  userName     String    @default("")
+  deviceId     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([tenantId, day])
+}
+
+// Server-only secrets of a client (SMS gateway key …). Never synced to desktop PCs.
+model Secret {
+  id        String   @id // `${tenantId}:${key}`
+  tenantId  String
+  key       String
+  value     String
+  updatedAt DateTime @default(now())
+}
