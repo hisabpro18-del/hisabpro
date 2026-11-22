@@ -10,6 +10,8 @@ const { PrismaClient } = require('@prisma/client');
     const prisma = new PrismaClient();
     const hash = await bcrypt.hash(password, 10);
     const existing = await prisma.user.findUnique({ where: { email } });
+    // never turn a shop's user (owner / cashier) into the super admin: SUPER_ADMIN_EMAIL is probably set to the wrong address
+    if (existing && existing.tenantId) throw new Error(`SUPER_ADMIN_EMAIL (${email}) is a shop's login. Set SUPER_ADMIN_EMAIL to the HisabPro administrator's own email.`);
     // a changed password ends the sessions signed in with the old one
     const changed = existing && !(await bcrypt.compare(password, existing.passwordHash));
     await prisma.user.upsert({

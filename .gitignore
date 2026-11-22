@@ -12,3 +12,6 @@ test-results/
 
 # screenshots of the reference app (contain shop data) — keep local only
 reference/khatapos/
+
+# values to paste into Render (contain secrets) — never commit
+render.env
