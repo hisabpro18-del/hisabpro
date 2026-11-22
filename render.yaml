@@ -1,0 +1,36 @@
+# Render Blueprint (Dashboard → New → Blueprint → pick the hisabpro repo). One web service runs the website/app, the API,
+# the desktop-sync API and the reminder scheduler. Starter plan recommended: the free plan sleeps after 15 idle minutes,
+# which delays the shops' desktop PCs syncing and the automatic SMS reminders.
+services:
+  - type: web
+    name: hisabpro
+    runtime: node
+    region: singapore          # closest Render region to Pakistan
+    plan: starter
+    # dev dependencies are needed for the build (Tailwind, Prisma CLI); Electron's own download is skipped on the server.
+    # Migrations and the super admin (from SUPER_ADMIN_*) run on every deploy; both are safe to repeat.
+    buildCommand: npm ci --include=dev && npm run build && npm run db:deploy && npm run seed
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: ELECTRON_SKIP_BINARY_DOWNLOAD
+        value: "1"
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: DATABASE_URL        # Supabase → Connect → Transaction pooler URI (port 6543) + ?pgbouncer=true
+        sync: false
+      - key: DIRECT_URL          # Supabase → Connect → Session pooler URI (port 5432)
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SUPER_ADMIN_EMAIL
+        sync: false
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+      - key: DESKTOP_OFFLINE_DAYS
+        value: "7"

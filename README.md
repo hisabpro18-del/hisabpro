@@ -85,9 +85,15 @@ npm run desktop:build         # → dist-desktop/HisabPro Setup <version>.exe
 Set the default server address in `desktop/config.json` (`serverUrl`) before building, or type it on the PC's first start.
 The installer is not code-signed yet: Windows SmartScreen will warn until a code-signing certificate is added.
 
-## Hosting (same as digital-invoice)
+## Hosting (same as digital-invoice): Supabase + Render
 
-Render web service (Node, `npm ci && npm run build && npm run db:deploy`, start `npm start`, health check `/healthz`) +
-Supabase Postgres (`DATABASE_URL` = the session pooler, port 5432, recommended; the transaction pooler also works with
-`?pgbouncer=true`, because the sync triggers only use transaction-scoped locks and settings). Env:
-`DATABASE_URL`, `JWT_SECRET`, `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD`, `NODE_ENV=production`, `TRUST_PROXY_HOPS=1`.
+1. **Supabase** (database) → project → **Connect** → *ORMs / connection string*:
+   - `DATABASE_URL` = **Transaction pooler** URI (port **6543**) with `?pgbouncer=true` added at the end
+   - `DIRECT_URL` = **Session pooler** URI (port **5432**) — migrations use it
+   Put the database password in both (percent-encode special characters: `#` → `%23`, `$` → `%24`, `%` → `%25`, `@` → `%40`).
+2. **Render** → **New → Blueprint** → repo `hisabpro` → it reads [render.yaml](render.yaml). Fill `DATABASE_URL`, `DIRECT_URL`,
+   `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD`; `JWT_SECRET` is generated. Each deploy builds, creates/updates the tables
+   (with the sync triggers) and the super admin. Health check: `/healthz`. Every push to `main` deploys.
+3. **Domain** (optional): Render → service → Settings → Custom Domains; add the DNS records where the domain is managed
+   (e.g. Vercel → Domains, as digital-invoice does). Vercel does not host the app itself.
+4. **Desktop app**: put the live address in `desktop/config.json` (`"serverUrl": "https://…"`), then `npm run desktop:build`.
