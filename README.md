@@ -8,6 +8,8 @@ Multi-tenant POS with khata (customer credit), inventory, purchasing, finance, r
 
 Every client sees its own shop name and logo in the app and on bills (e.g. "Minha traders"); HisabPro is the platform name.
 
+- **Taking over or starting development? Read the handbook: [docs/HANDBOOK.md](docs/HANDBOOK.md)** (links, servers,
+  accounts, architecture, sync, deploy, releases, runbooks, troubleshooting)
 - **Daily use guide for shops (English / اردو headings): [docs/USER-GUIDE.md](docs/USER-GUIDE.md)**
 - Plan and decisions: [PLAN.md](PLAN.md)
 - Developer guide (rules, patterns): [docs/DEV.md](docs/DEV.md)
