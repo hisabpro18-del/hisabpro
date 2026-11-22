@@ -1,6 +1,7 @@
 // The desktop PC's side of sync (MODE=desktop). Every few seconds, while online:
 //   1. push: rows in the local _outbox (written by triggers on every local change) are sent to the cloud
-//   2. pull: rows changed in the cloud since our cursor are applied locally (with the outbox triggers paused)
+//   2. pull: rows changed in the cloud since our cursor are applied locally (with the outbox triggers paused); when
+//      the cloud has cleaned away log entries we still need (kept 14 days), a fresh copy of the shop is downloaded
 // A pulled row that still has a local change waiting to be pushed is skipped when ours is newer (it goes up and wins);
 // when the cloud's is at least as new, the cloud would refuse ours, so the cloud's row is applied and ours dropped.
 const fs = require('fs');
@@ -82,6 +83,7 @@ async function loadState() {
         shopName: kv.shopName || '',
         token: kv.deviceToken || '',
         cursor: Number(kv.cursor || 0),
+        lastResyncAt: kv.lastResyncAt || null,
         problems: (() => { try { return JSON.parse(kv.problems || '[]'); } catch { return []; } })(),
     });
     await countPending();
@@ -161,34 +163,66 @@ async function push() {
 }
 
 // ── pull ──
+// cloud rows → this PC (with the outbox triggers paused, so they are not sent back up)
+async function applyRows(rows) {
+    let applied = 0;
+    if (!rows.length) return 0;
+    await prisma.$transaction(async tx => {
+        await tx.$executeRawUnsafe(`UPDATE "_flags" SET "v" = '1' WHERE "k" = 'applying'`);
+        for (const { tbl, row } of rows) {
+            if (!PULLABLE.has(tbl)) continue;
+            const waiting = await tx.$queryRawUnsafe('SELECT 1 FROM "_outbox" WHERE "tbl" = ? AND "rowId" = ? LIMIT 1', tbl, row.id);
+            if (waiting.length) {
+                // our own change is still waiting to go up: it goes first and wins if it is newer. The cloud refuses
+                // an older one (last change wins), so a cloud row at least as new replaces ours here and our change is
+                // dropped — otherwise the cursor moves past the cloud's change and this PC keeps its old row for good.
+                const local = await tx[delegate(tbl)].findUnique({ where: { id: row.id }, select: { updatedAt: true } });
+                if (!local || !local.updatedAt || !row.updatedAt || new Date(row.updatedAt) < new Date(local.updatedAt)) continue;
+                await tx.$executeRawUnsafe('DELETE FROM "_outbox" WHERE "tbl" = ? AND "rowId" = ?', tbl, row.id);
+            }
+            await upsertRow(tx, tbl, toData(tbl, row));
+            applied++;
+        }
+        await tx.$executeRawUnsafe(`UPDATE "_flags" SET "v" = '0' WHERE "k" = 'applying'`);
+    }, { timeout: 120000, maxWait: 30000 });
+    return applied;
+}
+
+// The cloud keeps its change log for two weeks only (to fit the database plan). A PC that was off longer — or a PC set
+// up after the log was cleaned — downloads a fresh copy of every table, then continues from the cloud's cursor at that
+// moment (changes made during the download are pulled again afterwards; applying a row twice does no harm).
+async function resync(resyncCursor, tables) {
+    let applied = 0;
+    for (const tbl of tables) {
+        if (!PULLABLE.has(tbl)) continue;
+        let after = '';
+        for (let page = 0; page < 100000; page++) {
+            const r = await http('GET', `/api/sync/snapshot?tbl=${encodeURIComponent(tbl)}&after=${encodeURIComponent(after)}`, undefined, 120000);
+            applied += await applyRows(r.rows.map(row => ({ tbl, row })));
+            if (!r.more || !r.next) break;
+            after = r.next;
+        }
+    }
+    const at = new Date().toISOString();
+    await setKV({ cursor: resyncCursor, lastResyncAt: at });
+    state.set({ cursor: resyncCursor, lastResyncAt: at });
+    return applied;
+}
+
 async function pull({ full } = {}) {
     let applied = 0;
     for (let round = 0; round < (full ? 1000 : 50); round++) {
         const s = state.get();
         const r = await http('GET', `/api/sync/pull?cursor=${s.cursor}&limit=1000`, undefined, 60000);
-        if (r.rows.length) {
-            await prisma.$transaction(async tx => {
-                await tx.$executeRawUnsafe(`UPDATE "_flags" SET "v" = '1' WHERE "k" = 'applying'`);
-                for (const { tbl, row } of r.rows) {
-                    if (!PULLABLE.has(tbl)) continue;
-                    const waiting = await tx.$queryRawUnsafe('SELECT 1 FROM "_outbox" WHERE "tbl" = ? AND "rowId" = ? LIMIT 1', tbl, row.id);
-                    if (waiting.length) {
-                        // our own change is still waiting to go up: it goes first and wins if it is newer. The cloud refuses
-                        // an older one (last change wins), so a cloud row at least as new replaces ours here and our change is
-                        // dropped — otherwise the cursor moves past the cloud's change and this PC keeps its old row for good.
-                        const local = await tx[delegate(tbl)].findUnique({ where: { id: row.id }, select: { updatedAt: true } });
-                        if (!local || !local.updatedAt || !row.updatedAt || new Date(row.updatedAt) < new Date(local.updatedAt)) continue;
-                        await tx.$executeRawUnsafe('DELETE FROM "_outbox" WHERE "tbl" = ? AND "rowId" = ?', tbl, row.id);
-                    }
-                    await upsertRow(tx, tbl, toData(tbl, row));
-                    applied++;
-                }
-                await tx.$executeRawUnsafe(`UPDATE "_flags" SET "v" = '0' WHERE "k" = 'applying'`);
-            }, { timeout: 120000, maxWait: 30000 });
+        const skew = r.serverTime ? Date.now() - Date.parse(r.serverTime) : 0;
+        if (r.resync) {
+            applied += await resync(Number(r.resyncCursor) || 0, Array.isArray(r.tables) ? r.tables : [...PULLABLE].sort());
+            state.set({ access: r.access, accessMode: r.mode, clockSkewMs: skew });
+            continue; // then the changes since
         }
+        applied += await applyRows(r.rows);
         await setKV({ cursor: r.cursor });
         // how far this PC's clock is from the server's (a wrong clock dates sales wrongly and wins conflicts it should not)
-        const skew = r.serverTime ? Date.now() - Date.parse(r.serverTime) : 0;
         state.set({ cursor: r.cursor, access: r.access, accessMode: r.mode, clockSkewMs: skew });
         if (!r.more) break;
     }
@@ -248,6 +282,7 @@ function status() {
         serverUrl: s.serverUrl || '', shopName: s.shopName || '', device: s.device ? { code: s.device.code, name: s.device.name } : null,
         offlineDaysLeft: daysLeft, error: s.error || '', version: APP_VERSION,
         clockSkewMinutes: Math.round((s.clockSkewMs || 0) / 60000), problems: (s.problems || []).length,
+        lastResyncAt: s.lastResyncAt || null, // last full download (after the cloud cleaned its sync log)
     };
 }
 

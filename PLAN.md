@@ -1,6 +1,6 @@
 # POS — plan
 
-_Status: built — all phases, see the progress table in §4 · updated 2026-11-21_
+_Status: built and live — all phases, see the progress table in §4 · updated 2026-11-22_
 
 Our own multi-tenant POS with the same screens, flows and fields as the reference app (captured read-only on
 2026-11-21; screen-by-screen spec in [reference/REFERENCE.md](reference/REFERENCE.md)). It has its own name and branding
@@ -109,7 +109,9 @@ Field-level detail for every screen and form: [reference/REFERENCE.md](reference
 | 6b | Khata recovery (added) | Khata Book, promises (وعدے), WhatsApp one-click reminders (as in Honda-Admin), automatic SMS through any HTTP SMS gateway, Urdu/English templates, message log, bilingual statements, day close | ✅ Done |
 | 6c | Wholesale / karyana (added) | Retail ⇄ wholesale switch, `24*code`, last rate per customer, receive udhaar at the counter, unknown barcode → add product | ✅ Done |
 | 6d | Urdu + easy flow (added) | Full Urdu interface (1,900+ strings, RTL, bundled font), Ctrl+K quick search, getting-started checklist, user guide | ✅ Done |
-| 7 | Go live | Code review (3 reviewers, 54 bugs fixed), 162 automated tests, demo data, docs | ✅ Done locally. Still to do by the owner: hosting (Render + Supabase), domain, code-signing certificate |
+| 7 | Go live | Code review (3 reviewers, 54 bugs fixed), automated tests, demo data, docs; Render + Supabase (Singapore) live at hisabpro-2r1x.onrender.com | ✅ Live. Still open: own domain, code-signing certificate |
+| 7b | Fit the free 500 MB database (added) | Daily clean-up of housekeeping rows (sync log 14 days, activity log and message history 1 year), PC resync from a fresh copy, size caps on photos / logo / files / held carts, storage card for the super admin | ✅ Done (175 tests) |
+| 7c | One-click app updates (added) | Settings → App update in the Windows app: check, download, restart & install from GitHub releases; quiet check on start and every 6 hours | ✅ Done |
 
 Each phase ends with its tests passing and a run in the real app (web, and from phase 3 the desktop app offline and online).
 
@@ -193,10 +195,12 @@ Windows PC at the counter (Electron app)                      Cloud (Render + Su
 | 2026-11-21 | Windows desktop app with offline mode and sync; web for everyone else |
 | 2026-11-21 | Product name **HisabPro** (main domain). Each client sees and prints its own shop name and logo (e.g. "Minha traders") |
 | 2026-11-21 | Build all phases, review the code, test in detail, then hand over |
+| 2026-11-22 | Stay on the Supabase free plan (500 MB): only housekeeping rows are cleaned; shop records are kept for ever |
+| 2026-11-22 | Windows app updates itself from GitHub releases (Settings → App update); shops never re-download the installer |
 
 ## 7. Open
 
-- The exact domain (e.g. hisabpro.com) — set it in `desktop/config.json` before building the installer.
+- The exact domain (e.g. hisabpro.com) — then set it in `desktop/config.json` and release an update (PCs already set up keep the address they were activated with).
 - FBR POS integration, multiple branches, Urdu (later). All screen text goes in one language file from the start, so Urdu is cheap to add.
 - The offline rules in section 5 (1–5).
 - Plan prices and limits.

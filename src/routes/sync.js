@@ -2,6 +2,8 @@
 //   POST /api/device/activate   owner / manager signs in once → a device token for this PC
 //   POST /api/sync/push         rows the PC changed (last change wins, by updatedAt)
 //   GET  /api/sync/pull         rows changed since the PC's cursor (from ChangeLog, minus the PC's own pushes)
+//                               { resync: true, resyncCursor } when old entries the PC still needs were cleaned away
+//   GET  /api/sync/snapshot     a fresh copy of one table of the shop, page by page (for a resync)
 //   GET  /api/desktop/status    on the web: { isDesktop: false } (the desktop app answers this itself)
 const express = require('express');
 const crypto = require('crypto');
@@ -14,6 +16,7 @@ const Access = require('../../public/js/shared/access');
 const { PULLABLE, PUSHABLE, delegate } = require('../sync/registry');
 const { toData, upsertRow } = require('../sync/apply');
 const { checkPassword } = require('./auth');
+const { syncFloor } = require('../services/maintenance');
 
 const router = express.Router();
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
@@ -118,6 +121,16 @@ router.get('/sync/pull', deviceAuth, async (req, res) => {
     const cursor = BigInt(Math.max(0, Number(req.query.cursor) || 0));
     const limit = Math.min(Math.max(Number(req.query.limit) || 1000, 1), 5000);
     const log = await prisma.changeLog.findMany({ where: { tenantId: t, seq: { gt: cursor } }, orderBy: { seq: 'asc' }, take: limit });
+    // read after the log: if the nightly clean-up removed entries this PC has not seen yet, it downloads a fresh copy of the
+    // shop instead (the clean-up deletes entries and moves the floor in one transaction, so this check never misses one)
+    const floor = BigInt(await syncFloor(t));
+    if (cursor < floor) {
+        const [m] = await prisma.$queryRaw`SELECT MAX("seq") AS m FROM "ChangeLog" WHERE "tenantId" = ${t}`;
+        const resyncCursor = m && m.m !== null && BigInt(m.m) > floor ? BigInt(m.m) : floor;
+        await prisma.device.update({ where: { id: req.device.id }, data: { lastSeenAt: new Date(), lastPullAt: new Date() } });
+        // rows: [] and the same cursor: an older PC app that does not know "resync" simply waits instead of skipping data
+        return res.json({ rows: [], cursor: Number(cursor), more: false, resync: true, resyncCursor: Number(resyncCursor), tables: SNAPSHOT_TABLES, access: Access.access(req.tenant), mode: req.access.mode, serverTime: new Date().toISOString() });
+    }
     const next = log.length ? log[log.length - 1].seq : cursor;
     // newest entry per row, leaving out what this PC pushed itself and tables PCs never receive
     const want = new Map();
@@ -136,6 +149,23 @@ router.get('/sync/pull', deviceAuth, async (req, res) => {
     }
     await prisma.device.update({ where: { id: req.device.id }, data: { lastSeenAt: new Date(), lastPullAt: new Date() } });
     res.json({ rows, cursor: Number(next), more: log.length === limit, access: Access.access(req.tenant), mode: req.access.mode, serverTime: new Date().toISOString() });
+});
+
+// a resync: every row of one table of this shop, by id, page by page (deleted rows too, so the PC learns of the deletes)
+const SNAPSHOT_TABLES = [...PULLABLE].sort();
+// rows per page: smaller for tables that may carry images (photos, logo, carts) or attached files (up to 4 × 250 KB)
+const PAGE = { Product: 100, Category: 100, Setting: 100, HeldSale: 100, Employee: 20, Candidate: 20 };
+router.get('/sync/snapshot', deviceAuth, async (req, res) => {
+    const t = req.device.tenantId;
+    const tbl = String(req.query.tbl || '');
+    if (!PULLABLE.has(tbl)) throw new HttpError(400, 'Unknown table.');
+    const after = str(req.query.after, 80);
+    const limit = PAGE[tbl] || 1000;
+    const where = tbl === 'Tenant' ? { id: t } : { tenantId: t };
+    if (after) where.AND = [{ id: { gt: after } }];
+    const rows = await prisma[delegate(tbl)].findMany({ where, orderBy: { id: 'asc' }, take: limit });
+    await prisma.device.update({ where: { id: req.device.id }, data: { lastSeenAt: new Date() } });
+    res.json({ rows, more: rows.length === limit, next: rows.length ? rows[rows.length - 1].id : after });
 });
 
 module.exports = { router, mount: '/api', cloudOnly: true };

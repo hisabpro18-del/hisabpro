@@ -13,7 +13,7 @@ const router = express.Router();
 router.use(authenticate);
 
 const EDITABLE = ['company', 'receipt', 'numbering', 'localization', 'pos'];
-const LOGO_MAX = 500 * 1024; // bytes of the image itself
+const LOGO_MAX = 150 * 1024; // bytes of the image itself (kept small: the database plan is 500 MB)
 const has = (b, k) => b[k] !== undefined;
 
 // decoded size of a base64 data: URL
@@ -22,7 +22,7 @@ function readLogo(v) {
     const s = String(v ?? '');
     if (!s) return '';
     if (!/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/]+={0,2}$/.test(s)) throw new HttpError(400, 'The logo must be a PNG or JPG image.');
-    if (dataUrlBytes(s) > LOGO_MAX) throw new HttpError(400, 'The logo is larger than 500 KB. Choose a smaller image.');
+    if (dataUrlBytes(s) > LOGO_MAX) throw new HttpError(400, 'The logo is larger than 150 KB. Choose a smaller image.');
     return s;
 }
 const isTz = z => { try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return true; } catch { return false; } };
@@ -98,7 +98,11 @@ router.get('/users', can('settings.manage'), async (req, res) => {
     const tz = (await settings.get(t, 'localization')).timezone;
     const today = dates.ymd(new Date(), tz);
     const r = dates.range('custom', { from: dates.addDays(today, -6), to: today, tz });
-    const logs = await prisma.auditLog.findMany({ where: { tenantId: t, createdAt: { gte: r.from, lt: r.to }, action: { in: ['auth.login', 'sale.create'] } }, select: { action: true, createdAt: true } });
+    const [logins, sales] = await Promise.all([
+        prisma.auditLog.findMany({ where: { tenantId: t, createdAt: { gte: r.from, lt: r.to }, action: 'auth.login' }, select: { action: true, createdAt: true } }),
+        prisma.sale.findMany({ where: { tenantId: t, deletedAt: null, createdAt: { gte: r.from, lt: r.to } }, select: { createdAt: true } }),
+    ]);
+    const logs = [...logins, ...sales.map(s => ({ action: 'sale', createdAt: s.createdAt }))];
     const activity = r.days.map(d => ({ day: d, label: new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }), signIns: 0, sales: 0 }));
     const byDay = Object.fromEntries(activity.map(a => [a.day, a]));
     for (const l of logs) { const a = byDay[dates.ymd(l.createdAt, tz)]; if (a) a[l.action === 'auth.login' ? 'signIns' : 'sales']++; }

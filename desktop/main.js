@@ -59,6 +59,11 @@ async function boot() {
     const originOf = u => { try { return new URL(u).origin; } catch { return ''; } };
     win.webContents.on('will-navigate', (e, url) => { if (originOf(url) !== own) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); } });
     await win.loadURL(`http://127.0.0.1:${port}/`);
+    // a quiet look for a new version a little after start, then every 6 hours
+    if (app.isPackaged && !process.env.HP_HIDDEN) {
+        setTimeout(() => checkForUpdates().catch(() => {}), 20000);
+        setInterval(() => { if (['idle', 'latest', 'error'].includes(update.status)) checkForUpdates().catch(() => {}); }, 6 * 3600000);
+    }
 }
 
 // silent printing (Receipt & POS → Auto-Print on Save): straight to the default printer, no dialog
@@ -66,6 +71,56 @@ ipcMain.handle('print-silent', event => new Promise(resolve => {
     event.sender.print({ silent: true, printBackground: true }, (ok, reason) => resolve({ ok, reason }));
 }));
 ipcMain.handle('app-info', () => ({ version: app.getVersion(), dataFolder: userData }));
+
+// ── app updates (Settings → App update) ──
+// New versions are published as GitHub releases (see docs/DEV.md). The app checks quietly on start and every 6 hours;
+// downloading and installing happen only when the user clicks. The shop's data (AppData\HisabPro) is never touched by an
+// update, and a newer app adds any new database columns itself when it starts.
+let updater = null;
+let update = { status: 'idle', current: app.getVersion(), version: '', notes: '', percent: 0, error: '', checkedAt: null };
+function setUpdate(patch) {
+    update = { ...update, ...patch };
+    if (win && !win.isDestroyed()) win.webContents.send('update-state', update);
+}
+function getUpdater() {
+    if (updater) return updater;
+    if (!app.isPackaged) return null; // only an installed app can update itself
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.autoDownload = false;          // the user decides when (downloads can be large on a slow line)
+    autoUpdater.autoInstallOnAppQuit = true;   // a downloaded update also goes in the next time the app is closed
+    autoUpdater.on('checking-for-update', () => setUpdate({ status: 'checking', error: '' }));
+    autoUpdater.on('update-available', i => setUpdate({ status: 'available', version: i.version, notes: typeof i.releaseNotes === 'string' ? i.releaseNotes.replace(/<[^>]+>/g, '').slice(0, 2000) : '', checkedAt: new Date().toISOString() }));
+    autoUpdater.on('update-not-available', () => setUpdate({ status: 'latest', version: '', checkedAt: new Date().toISOString() }));
+    autoUpdater.on('download-progress', p => setUpdate({ status: 'downloading', percent: Math.round(p.percent || 0) }));
+    autoUpdater.on('update-downloaded', i => setUpdate({ status: 'ready', version: i.version, percent: 100 }));
+    autoUpdater.on('error', e => setUpdate({ status: 'error', error: String((e && e.message) || e).split('\n')[0].slice(0, 300) }));
+    updater = autoUpdater;
+    return updater;
+}
+const offline = () => setUpdate({ status: 'error', error: 'Could not reach the update server. Check the internet connection and try again.' });
+async function checkForUpdates() {
+    const u = getUpdater();
+    if (!u) { setUpdate({ status: 'dev', error: 'Updates work in the installed app only.' }); return update; }
+    if (['checking', 'downloading', 'ready'].includes(update.status)) return update;
+    try { await u.checkForUpdates(); } catch { if (update.status === 'checking') offline(); }
+    return update;
+}
+ipcMain.handle('update-state', () => update);
+ipcMain.handle('update-check', () => checkForUpdates());
+ipcMain.handle('update-download', async () => {
+    const u = getUpdater();
+    if (!u || update.status !== 'available') return update;
+    setUpdate({ status: 'downloading', percent: 0, error: '' });
+    u.downloadUpdate().catch(() => { if (update.status === 'downloading') offline(); });
+    return update;
+});
+ipcMain.handle('update-install', () => {
+    const u = getUpdater();
+    if (!u || update.status !== 'ready') return update;
+    // close and run the new installer silently; it starts HisabPro again when done
+    setImmediate(() => u.quitAndInstall(true, true));
+    return { ...update, status: 'installing' };
+});
 
 Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: 'HisabPro', submenu: [{ role: 'reload' }, { role: 'togglefullscreen' }, { type: 'separator' }, { label: 'Open data folder', click: () => shell.openPath(userData) }, { type: 'separator' }, { role: 'quit' }] },

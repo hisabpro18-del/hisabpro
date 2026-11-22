@@ -245,7 +245,7 @@ router.post('/sales', SELL, async (req, res) => {
         return created;
     });
     if (sale.duplicate) return res.json(saleView(sale));
-    await audit(req, { action: 'sale.create', summary: `Sale ${sale.number}: ${Calc.toRupees(N(sale.total)).toFixed(2)} (${sale.mode === 'CREDIT' ? `credit, due ${Calc.toRupees(N(sale.due)).toFixed(2)}` : 'paid'})` });
+    // no activity-log row per sale: the sale itself records who made it and when (and the log would grow by every bill)
     res.json(saleView(sale));
 });
 
@@ -305,7 +305,7 @@ router.get('/held', SELL, async (req, res) => {
 router.post('/held', SELL, async (req, res) => {
     const b = req.body || {};
     const cart = JSON.stringify(b.cart || {});
-    if (cart.length > 200000) throw new HttpError(400, 'That cart is too large to hold.');
+    if (cart.length > 60000) throw new HttpError(400, 'That cart is too large to hold.');
     const h = await prisma.heldSale.create({ data: { tenantId: req.user.tenantId, label: str(b.label, 80), cart, total: B(paisa(b.total, 'Total')), userId: req.user.id, userName: req.user.name || req.user.email } });
     res.json({ id: h.id });
 });

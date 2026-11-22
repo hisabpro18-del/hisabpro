@@ -10,6 +10,7 @@ const { checkNewPassword } = require('./auth');
 const { seedTenant } = require('../services/tenant');
 const settings = require('../services/settings');
 const limits = require('../limits');
+const maintenance = require('../services/maintenance');
 const Perms = require('../../public/js/shared/permissions');
 const Plans = require('../../public/js/shared/plans');
 const Access = require('../../public/js/shared/access');
@@ -49,6 +50,14 @@ router.get('/stats', async (req, res) => {
         devices: await prisma.device.count({ where: { revokedAt: null } }),
         recent: (await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 8 })),
     });
+});
+
+// ── database storage (free plan: 500 MB) ──
+router.get('/storage', async (req, res) => res.json({ ...(await maintenance.storage()), lastCleanup: maintenance.lastRun() }));
+router.post('/maintenance', async (req, res) => {
+    const r = await maintenance.runAll();
+    await audit(req, { action: 'admin.maintenance', summary: `Database clean-up: ${r.changeLog} sync log, ${r.audit} activity, ${r.messages} message and ${r.held} held-cart rows removed${r.errors.length ? ` (${r.errors.length} step(s) failed)` : ''}` });
+    res.json({ ...r, storage: await maintenance.storage() });
 });
 
 // ── clients ──

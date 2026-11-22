@@ -115,7 +115,7 @@ function readProduct(b) {
         barcode: type === 'VARIANT' ? '' : str(b.barcode, 60),
         categoryId: str(b.categoryId, 60) || null,
         brandId: str(b.brandId, 60) || null,
-        imageUrl: (() => { const u = String(b.imageUrl || ''); if (u.length > 400000) throw new HttpError(400, 'The image is too large (keep it under about 300 KB).'); if (u && !/^(https:\/\/|data:image\/(png|jpe?g|webp);base64,)/i.test(u)) throw new HttpError(400, 'Image URL must start with https://'); return u; })(),
+        imageUrl: (() => { const u = String(b.imageUrl || ''); if (u.length > 90000) throw new HttpError(400, 'The image is too large (keep it under about 60 KB).'); if (u && !/^(https:\/\/|data:image\/(png|jpe?g|webp);base64,)/i.test(u)) throw new HttpError(400, 'Image URL must start with https://'); return u; })(),
         active: b.active === undefined ? true : bool(b.active),
         retailPrice: B(paisa(b.retailPrice, 'Retail price')),
         wholesalePrice: b.wholesalePrice === '' || b.wholesalePrice === null || b.wholesalePrice === undefined || Number(b.wholesalePrice) === 0 ? null : B(paisa(b.wholesalePrice, 'Wholesale price')),

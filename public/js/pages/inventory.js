@@ -184,7 +184,7 @@ async function productDrawer(id, onDone, prefill) {
             });
             form.addEventListener('change', async e => {
                 if (e.target.matches('[data-img-file]')) {
-                    try { image = await ui.readImage(e.target.files[0], 400, 300 * 1024); form.querySelector('[data-img-prev]').innerHTML = `<img src="${image}" class="h-full w-full object-cover" alt="">`; } catch (err) { ui.fail(err); }
+                    try { image = await ui.readImage(e.target.files[0], 320, 40 * 1024, { jpeg: true }); form.querySelector('[data-img-prev]').innerHTML = `<img src="${image}" class="h-full w-full object-cover" alt="">`; } catch (err) { ui.fail(err); }
                 }
                 if (e.target.matches('[data-pick]')) {
                     const set = e.target.dataset.pick === 'colors' ? pickedColors : pickedSizes;

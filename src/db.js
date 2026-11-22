@@ -39,11 +39,11 @@ async function lockTenant(tx, tenantId) {
 }
 
 // Run fn(tx) in one transaction holding the client's lock
-function withTx(tenantId, fn) {
+function withTx(tenantId, fn, opts) {
     return prisma.$transaction(async tx => {
         await lockTenant(tx, tenantId);
         return fn(tx);
-    }, { maxWait: 15000, timeout: 30000 });
+    }, { maxWait: 15000, timeout: 30000, ...opts });
 }
 
 // field types of every model (used by sync to turn JSON back into dates and BigInts)

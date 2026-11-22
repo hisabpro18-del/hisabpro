@@ -29,7 +29,7 @@ const STAGE_LABEL = { APPLIED: 'Applied', SCREENING: 'Screening', INTERVIEW: 'In
 const ASSET_CATEGORIES = ['Laptop', 'Phone', 'Vehicle', 'Tablet', 'Access Card', 'Other'];
 const ASSET_STATUS = ['IN_USE', 'RETURNED', 'DAMAGED'];
 const SALARY_CATEGORY = 'Salaries & Wages';
-const MAX_FILE = 600 * 1024; // bytes of one attached file (it is kept as a data: URL inside the row)
+const MAX_FILE = 250 * 1024; // bytes of one attached file (kept as a data: URL inside the row; the database plan is 500 MB)
 const FILE_TYPES = /^(application\/pdf|image\/(png|jpe?g|webp|gif)|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain)$/i;
 
 // ── small readers and helpers ──
@@ -70,7 +70,7 @@ function workedHours(checkIn, checkOut) {
 const minutesLate = (checkIn, start) => ((((mins(checkIn) - mins(start) + 720) % 1440) + 1440) % 1440) - 720;
 const autoStatus = (checkIn, shift) => (shift && checkIn && minutesLate(checkIn, shift.startTime) > (shift.graceMinutes || 0) ? 'LATE' : 'PRESENT');
 
-// an attached file sent as a data: URL (PDF, image or Word), at most 600 KB
+// an attached file sent as a data: URL (PDF, image or Word), at most 250 KB
 function dataUrl(v, label) {
     const s = String(v || '');
     if (!s) return '';
@@ -78,7 +78,7 @@ function dataUrl(v, label) {
     if (!m) throw new HttpError(400, `${label}: the file could not be read.`);
     if (!FILE_TYPES.test(m[1])) throw new HttpError(400, `${label}: use a PDF, an image or a Word file.`);
     const bytes = Math.floor((m[2].length * 3) / 4) - (m[2].endsWith('==') ? 2 : m[2].endsWith('=') ? 1 : 0);
-    if (bytes > MAX_FILE) throw new HttpError(400, `${label} is larger than 600 KB.`);
+    if (bytes > MAX_FILE) throw new HttpError(400, `${label} is larger than 250 KB.`);
     return s;
 }
 

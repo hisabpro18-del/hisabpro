@@ -36,14 +36,14 @@ test('settings: read, validated saves, permissions, logo rules, read-only users'
         assert.equal(me.settings.company.address, 'Sahiwal');
     });
 
-    await t.test('logo: PNG/JPEG data URL up to 500 KB; too large or another type is refused', async () => {
+    await t.test('logo: PNG/JPEG data URL up to 150 KB; too large or another type is refused', async () => {
         const ok = await h.put('/api/settings/company', { logo: PNG });
         assert.equal(ok.status, 200, JSON.stringify(ok.data));
         assert.equal((await h.get('/api/settings')).data.company.logo, PNG);
-        const big = 'data:image/png;base64,' + 'A'.repeat(Math.ceil(510 * 1024 * 4 / 3));
+        const big = 'data:image/png;base64,' + 'A'.repeat(Math.ceil(160 * 1024 * 4 / 3));
         const tooBig = await h.put('/api/settings/company', { logo: big });
         assert.equal(tooBig.status, 400);
-        assert.match(tooBig.data.error, /500 KB/);
+        assert.match(tooBig.data.error, /150 KB/);
         assert.equal((await h.put('/api/settings/company', { logo: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=' })).status, 400);
         assert.equal((await h.put('/api/settings/company', { logo: 'https://example.com/logo.png' })).status, 400);
         assert.equal((await h.get('/api/settings')).data.company.logo, PNG, 'a refused logo leaves the saved one');

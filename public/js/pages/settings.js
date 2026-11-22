@@ -13,6 +13,8 @@ const LAYOUT = [
     ['showCashier', 'Show Salesman / Cashier Name', ''], ['showSignature', 'Show Digital Signature Line', 'Space for physical stamp or signature'],
 ];
 const TABS = [['company', 'Company Profile', 'building'], ['receipt', 'Receipt & POS', 'receipt'], ['localization', 'Localization', 'globe']];
+// the Windows app also gets "App update" (one click to install a new version)
+const tabsHere = () => (HP.updates && HP.updates.available() ? [...TABS, ['update', 'App update', 'download']] : TABS);
 
 const subCard = (title, sub, body) => html`<div class="rounded-xl border border-line p-5"><div class="font-semibold">${title}</div><div class="mb-4 mt-0.5 text-xs text-muted">${sub}</div>${body}</div>`;
 const choiceCard = (name, value, cur, iconName, title, caption, compact) => html`<button type="button" data-choice="${name}" data-v="${value}" aria-pressed="${value === cur ? 'true' : 'false'}"
@@ -24,7 +26,7 @@ const segChoice = (name, options, cur) => html`<div class="inline-flex overflow-
 HP.page('/settings', {
     title: 'Settings', perm: 'settings.manage',
     async render(el, params, query) {
-        let tab = TABS.some(x => x[0] === query.tab) ? query.tab : 'company';
+        let tab = tabsHere().some(x => x[0] === query.tab) ? query.tab : 'company';
         let s = await api.get('/api/settings');
         let logo = s.company.logo || '';
         let rc = { ...s.receipt }, pos = { ...s.pos };
@@ -40,7 +42,7 @@ HP.page('/settings', {
                     <div class="flex h-16 w-16 items-center justify-center overflow-hidden rounded-lg border border-line bg-white" data-logo-prev>${logo ? html`<img src="${logo}" alt="Company logo" class="h-full w-full object-contain">` : icon('image', 'w-6 h-6 text-faint')}</div>
                     <div><input type="file" accept="image/png,image/jpeg" data-logo-file aria-label="Choose file" class="block text-sm text-muted file:me-3 file:cursor-pointer file:rounded-lg file:border file:border-line file:bg-surface file:px-3 file:py-1.5 file:text-sm file:text-ink hover:file:bg-surface-2">
                       ${logo ? html`<button type="button" class="mt-2 text-xs text-rose-600" data-logo-remove>Remove logo</button>` : ''}</div></div>
-                  <p class="help">Shown on printed receipts. Max 500 KB.</p></div>`)}
+                  <p class="help">Shown on printed receipts. Max 150 KB.</p></div>`)}
               <div class="mt-6 border-t border-line pt-5"><button class="btn btn-primary" data-save>${t('Save')}</button></div></form>`;
 
         const receipt = () => html`<div class="text-lg font-semibold">Receipt & POS</div><p class="mt-1 text-sm text-muted">Invoice configuration engine — templates, B2B layout, branding, and automation</p>
@@ -93,9 +95,10 @@ HP.page('/settings', {
             ui.mount(el, html`<div class="mb-6 flex items-start gap-3"><div class="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent">${icon('sliders', 'w-5 h-5')}</div>
                 <div><h1 class="text-2xl font-bold tracking-tight">${t('Settings')}</h1><p class="mt-1 text-sm text-muted">Core business configuration — modular ERP settings engine</p></div></div>
               <div class="grid items-start gap-6 lg:grid-cols-[260px_1fr]">
-                <div class="card p-2">${TABS.map(([v, l, ic]) => html`<button type="button" data-tab="${v}" class="flex w-full items-center gap-3 rounded-lg px-4 h-11 text-sm ${v === tab ? 'bg-accent-soft font-semibold text-accent' : 'hover:bg-surface-2'}">${icon(ic, 'w-4 h-4')}${l}</button>`)}</div>
-                <div class="card p-6 sm:p-8" data-panel>${tab === 'company' ? company() : tab === 'receipt' ? receipt() : localization()}</div>
+                <div class="card p-2">${tabsHere().map(([v, l, ic]) => html`<button type="button" data-tab="${v}" class="flex w-full items-center gap-3 rounded-lg px-4 h-11 text-sm ${v === tab ? 'bg-accent-soft font-semibold text-accent' : 'hover:bg-surface-2'}">${icon(ic, 'w-4 h-4')}${l}</button>`)}</div>
+                <div class="card p-6 sm:p-8" data-panel>${tab === 'company' ? company() : tab === 'receipt' ? receipt() : tab === 'update' ? '' : localization()}</div>
               </div>`);
+            if (tab === 'update') HP.updates.card(el.querySelector('[data-panel]'));
         }
         // keep what was typed when a choice card re-draws the receipt tab
         const keepReceipt = () => {
@@ -131,7 +134,7 @@ HP.page('/settings', {
             if (!file) return;
             try {
                 if (!/^image\/(png|jpeg)$/.test(file.type)) throw new Error('Choose a PNG or JPG image.');
-                logo = await ui.readImage(file, 512, 500 * 1024);
+                logo = await ui.readImage(file, 360, 150 * 1024);
                 el.querySelector('[data-logo-prev]').innerHTML = String(html`<img src="${logo}" alt="Company logo" class="h-full w-full object-contain">`);
             } catch (err) { input.value = ''; ui.fail(err); }
         });

@@ -304,19 +304,30 @@
         setTimeout(() => { if (HP.ui.afterPrintRender) HP.ui.afterPrintRender(root); setTimeout(() => (silent ? window.hpDesktop.printSilent() : window.print()), 150); }, 50);
     }
 
-    // file → data: URL (images are shrunk to maxPx on the longer side)
-    function readImage(file, maxPx = 512, maxBytes = 800 * 1024) {
+    // file → data: URL, shrunk to maxPx on the longer side; JPEG quality steps down until it fits in maxBytes.
+    // { jpeg: true } always saves a JPEG (product photos: much smaller than PNG; the database plan is 500 MB)
+    function readImage(file, maxPx = 512, maxBytes = 800 * 1024, { jpeg = false } = {}) {
         return new Promise((resolve, reject) => {
             if (!file) return resolve('');
             if (!/^image\/(png|jpe?g|webp)$/.test(file.type)) return reject(new Error('Choose a PNG or JPG image.'));
-            if (file.size > maxBytes * 4) return reject(new Error('That image is too large.'));
+            if (file.size > 15 * 1024 * 1024) return reject(new Error('That image is too large.'));
             const img = new Image();
             img.onload = () => {
                 const s = Math.min(1, maxPx / Math.max(img.width, img.height));
                 const c = document.createElement('canvas'); c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
-                c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-                const url = c.toDataURL(file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.85);
-                if (url.length > maxBytes * 1.37) return reject(new Error('That image is too large after shrinking.'));
+                const g = c.getContext('2d');
+                const asJpeg = jpeg || file.type !== 'image/png';
+                if (asJpeg) { g.fillStyle = '#ffffff'; g.fillRect(0, 0, c.width, c.height); } // transparent parts → white, not black
+                g.drawImage(img, 0, 0, c.width, c.height);
+                const limit = maxBytes * 1.37; // base64 is about 4/3 of the bytes
+                let url = asJpeg ? '' : c.toDataURL('image/png');
+                if (!url || url.length > limit) {
+                    let src = c;
+                    if (!asJpeg) { src = document.createElement('canvas'); src.width = c.width; src.height = c.height; const w = src.getContext('2d'); w.fillStyle = '#ffffff'; w.fillRect(0, 0, c.width, c.height); w.drawImage(c, 0, 0); }
+                    for (const q of [0.85, 0.75, 0.65, 0.55, 0.45]) { url = src.toDataURL('image/jpeg', q); if (url.length <= limit) break; }
+                }
+                URL.revokeObjectURL(img.src);
+                if (url.length > limit) return reject(new Error('That image is too large after shrinking.'));
                 resolve(url);
             };
             img.onerror = () => reject(new Error('That file is not a readable image.'));

@@ -72,6 +72,35 @@ HP.page('/things', { title: 'Things', perm: 'finance.manage', async render(el, p
 - Money colours follow the reference: revenue/cash green, expenses/payable red, receivable amber, negative profit red.
 - Wrap visible English text in `t()` where it is a menu/common word; Urdu falls back to English.
 
+## Database size (Supabase free plan: 500 MB)
+
+The super admin dashboard shows the size, the biggest tables and a **Clean up now** button. `src/services/maintenance.js`
+runs daily from the scheduler and only removes housekeeping rows — never shop records:
+
+| What | Kept | Setting |
+|---|---|---|
+| Sync change log (what PCs pull) | 14 days; none for shops without a PC | `SYNC_LOG_DAYS` |
+| Activity log | 365 days (the append-only trigger allows deletes only with `hp.retention = 'on'`) | `AUDIT_RETENTION_DAYS` |
+| WhatsApp / SMS history | 365 days (queued messages are never removed) | `MESSAGE_RETENTION_DAYS` |
+| Removed held carts | 30 days | — |
+
+When change-log entries a PC still needs were cleaned away, its pull answers `{ resync: true }` and the PC downloads a
+fresh copy table by table (`GET /api/sync/snapshot`), then continues from the cursor it was given. Size caps: product
+photo ≈ 60 KB (the app saves a 320 px JPEG), logo 150 KB, HR files 250 KB, held cart 60 KB. Sales write no activity-log
+row (the sale records who made it). Do not log every row of a busy table in the activity log.
+
+## Windows app: build, release, update
+
+- `desktop/config.json` → `serverUrl` is the address new PCs are offered at activation (the live server).
+- `npm run desktop:build` makes `dist-desktop/HisabPro Setup <version>.exe` (built on a Mac; not code-signed).
+- **Releasing an update** (installed PCs get it from Settings → App update):
+  1. raise `"version"` in `package.json` (e.g. 1.0.0 → 1.0.1) — a PC only updates to a higher version;
+  2. `GH_TOKEN=$(gh auth token) npm run desktop:release` — builds and publishes a GitHub release on
+     `hisabpro18-del/hisabpro` with the installer, `latest.yml` and the `.blockmap` (all three are needed);
+  3. PCs see it within 6 hours or at once with **Check for updates**; downloading and installing need one click each.
+- The shop's data (`%APPDATA%\HisabPro\hisabpro.db`) is never touched by an update; a newer app adds new database
+  columns itself when it starts (`ensureSchema` in `src/sync/client.js`). Changing the sync protocol? Keep old PCs working.
+
 ## Tests
 
 `test/helpers.js` starts the app on a free port and makes a fresh client (owner token) per test file:

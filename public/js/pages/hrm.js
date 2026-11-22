@@ -14,7 +14,7 @@ const ASSET_CATEGORIES = ['Laptop', 'Phone', 'Vehicle', 'Tablet', 'Access Card',
 const ASSET_STATUS = { IN_USE: ['In Use', 'accent'], RETURNED: ['Returned', 'good'], DAMAGED: ['Damaged', 'bad'] };
 const STAGES = [['APPLIED', 'Applied'], ['SCREENING', 'Screening'], ['INTERVIEW', 'Interviewing'], ['OFFER', 'Offered'], ['HIRED', 'Hired'], ['REJECTED', 'Rejected']];
 const STAGE_LABEL = Object.fromEntries(STAGES);
-const MAX_FILE = 600 * 1024;
+const MAX_FILE = 250 * 1024;
 const FILE_ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.txt';
 const FILE_RE = /^(application\/pdf|image\/(png|jpe?g|webp|gif)|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain)$/i;
 const PAL = ui.PALETTE;
@@ -286,7 +286,7 @@ async function employeeDrawer(id, onDone, prefill = {}) {
             ${ui.field({ label: 'Bank Name', name: 'bankName', value: e.bankName || '', placeholder: 'e.g. HBL, Meezan Bank', half: true })}
             ${ui.field({ label: 'IBAN / Account Number', name: 'iban', value: e.iban || '', placeholder: 'PKxxXXXX...', cls: '[&_input]:font-mono' })}
             ${ui.field({ label: 'Tax / NTN Status', name: 'taxStatus', type: 'select', value: e.taxStatus, options: TAX_STATUS })}</div>`,
-        documents: () => html`<p class="mb-4 text-sm text-muted">Attach onboarding documents. Files (PDF, image or Word, up to 600 KB each) are stored with the employee record.</p><div class="space-y-3" data-docs>${DOCS.map(docRow)}</div>`,
+        documents: () => html`<p class="mb-4 text-sm text-muted">Attach onboarding documents. Files (PDF, image or Word, up to 250 KB each) are stored with the employee record.</p><div class="space-y-3" data-docs>${DOCS.map(docRow)}</div>`,
     };
     const setTab = k => {
         form.querySelectorAll('[data-etab]').forEach(b => { b.className = tabCls(b.dataset.etab === k); b.setAttribute('aria-selected', String(b.dataset.etab === k)); });
@@ -841,11 +841,11 @@ function candidateDrawer(postings, onDone) {
             ${ui.field({ label: 'Position Title', name: 'position', required: true, placeholder: 'e.g. Sales Executive' })}
             <div class="col-span-12"><div class="label">Resume Upload</div>
               <label class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-line px-4 py-6 text-center text-sm text-muted hover:bg-surface-2" data-dropzone>${icon('upload', 'w-6 h-6')}
-                <span data-resname>Drop a PDF, image or Word file here (up to 600 KB)</span><span class="btn btn-outline btn-sm">Browse Resume</span><input type="file" class="hidden" accept="${FILE_ACCEPT}" data-resume aria-label="Resume file"></label></div>
+                <span data-resname>Drop a PDF, image or Word file here (up to 250 KB)</span><span class="btn btn-outline btn-sm">Browse Resume</span><input type="file" class="hidden" accept="${FILE_ACCEPT}" data-resume aria-label="Resume file"></label></div>
             ${ui.field({ label: 'Applied Date', name: 'appliedDate', type: 'date', value: todayYmd() })}</div>`,
         onMount(form) {
             const take = async file => {
-                try { resume = await pickFile(file); form.querySelector('[data-resname]').textContent = resume ? `${resume.name} — attached` : 'Drop a PDF, image or Word file here (up to 600 KB)'; }
+                try { resume = await pickFile(file); form.querySelector('[data-resname]').textContent = resume ? `${resume.name} — attached` : 'Drop a PDF, image or Word file here (up to 250 KB)'; }
                 catch (err) { resume = null; ui.fail(err); }
             };
             form.addEventListener('change', e => {

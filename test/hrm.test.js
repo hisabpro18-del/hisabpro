@@ -46,13 +46,13 @@ test('hrm: employees, shifts, attendance, leaves, payroll, advances, recruitment
         assert.deepEqual(one.documents, []);
     });
 
-    await t.test('documents: up to four files of at most 600 KB, stored with the employee', async () => {
+    await t.test('documents: up to four files of at most 250 KB, stored with the employee', async () => {
         const r = await h.put(`/api/hrm/employees/${ahmed}/documents/CNIC`, { name: 'cnic.pdf', dataUrl: pdf('cnic') });
         assert.equal(r.status, 200, JSON.stringify(r.data));
         await h.put(`/api/hrm/employees/${ahmed}/documents/CV`, { name: 'cv.pdf', dataUrl: pdf('cv') });
-        const big = await h.put(`/api/hrm/employees/${ahmed}/documents/CONTRACT`, { name: 'big.pdf', dataUrl: 'data:application/pdf;base64,' + Buffer.alloc(700 * 1024).toString('base64') });
+        const big = await h.put(`/api/hrm/employees/${ahmed}/documents/CONTRACT`, { name: 'big.pdf', dataUrl: 'data:application/pdf;base64,' + Buffer.alloc(300 * 1024).toString('base64') });
         assert.equal(big.status, 400);
-        assert.match(big.data.error, /600 KB/);
+        assert.match(big.data.error, /250 KB/);
         const html = await h.put(`/api/hrm/employees/${ahmed}/documents/CONTRACT`, { name: 'x.html', dataUrl: 'data:text/html;base64,PGI+eDwvYj4=' });
         assert.equal(html.status, 400);
         const one = (await h.get('/api/hrm/employees/' + ahmed)).data;

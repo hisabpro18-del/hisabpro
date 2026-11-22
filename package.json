@@ -1,6 +1,6 @@
 {
   "name": "hisabpro",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "HisabPro — multi-tenant POS with khata, inventory, finance and HRM; web + offline Windows desktop app with sync",
   "main": "desktop/main.js",
@@ -20,7 +20,8 @@
     "gen:keys": "node -e \"console.log('JWT_SECRET='+require('crypto').randomBytes(48).toString('hex'))\"",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "desktop": "electron .",
-    "desktop:build": "npm run build && npm run build:sqlite && electron-builder --win nsis --x64"
+    "desktop:build": "npm run build && npm run build:sqlite && electron-builder --win nsis --x64",
+    "desktop:release": "npm run build && npm run build:sqlite && electron-builder --win nsis --x64 --publish always"
   },
   "engines": {
     "node": ">=22"
@@ -44,7 +45,14 @@
       "desktop/preload.js",
       "desktop/config.json",
       "desktop/schema.sql",
-      "desktop/icon.png"
+      "desktop/icon.png",
+      "!node_modules/electron/**",
+      "!node_modules/electron-builder/**",
+      "!node_modules/app-builder-bin/**",
+      "!node_modules/app-builder-lib/**",
+      "!node_modules/@tailwindcss/**",
+      "!node_modules/tailwindcss/**",
+      "!node_modules/lightningcss*/**"
     ],
     "asarUnpack": [
       "src/generated/sqlite/**"
@@ -57,14 +65,24 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "HisabPro"
+      "shortcutName": "HisabPro",
+      "deleteAppDataOnUninstall": false
     },
-    "icon": "desktop/icon.png"
+    "icon": "desktop/icon.png",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "hisabpro18-del",
+        "repo": "hisabpro",
+        "releaseType": "release"
+      }
+    ]
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
     "bcryptjs": "^3.0.2",
     "dotenv": "^17.2.0",
+    "electron-updater": "^6.8.11",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2"
   },

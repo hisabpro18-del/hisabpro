@@ -86,3 +86,6 @@ cash, type it, **Save & print Z-report**. Short or over is recorded with your no
 3. From then on it keeps selling **without internet**. The top bar shows **Offline · n waiting**; when the internet is
    back everything is sent automatically (**Syncing** → **Live / Online**).
 4. A PC must connect at least once every 7 days. Lost or sold a PC? Ask HisabPro to **revoke** it.
+5. **New version?** HisabPro shows a notice. The owner opens **Settings → App update → Download update →
+   Restart & install** (about a minute; sales waiting to sync are kept). No need to download a new installer.
+   نیا ورژن: سیٹنگز ← ایپ اپڈیٹ ← اپڈیٹ ڈاؤن لوڈ کریں ← ری اسٹارٹ کر کے انسٹال کریں۔

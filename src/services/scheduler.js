@@ -2,6 +2,7 @@
 //   - automatic SMS for payment promises due today (or N days before), at most once a day per promise, after the
 //     shop's chosen hour — only for shops that switched SMS and automatic reminders on
 //   - SMS queued on desktop PCs (they cannot reach the gateway themselves) are sent once their rows have synced up
+//   - once a day: database housekeeping (services/maintenance.js) so the free 500 MB plan does not fill up
 // Each message is claimed by a conditional update first, so two server instances never send the same message twice.
 const { prisma, isDesktop } = require('../db');
 const settings = require('./settings');
@@ -10,6 +11,7 @@ const ledger = require('./ledger');
 const dates = require('../lib/dates');
 const { N } = require('../lib/money');
 const { promiseValues } = require('./khata');
+const maintenance = require('./maintenance');
 
 let timer = null;
 
@@ -62,7 +64,11 @@ async function runOnce(now = new Date()) {
 
 function start(intervalMs = 5 * 60000) {
     if (isDesktop || timer) return;
-    const tick = async () => { try { await runOnce(); } catch (e) { console.error('scheduler:', e.message); } timer = setTimeout(tick, intervalMs); };
+    const tick = async () => {
+        try { await runOnce(); } catch (e) { console.error('scheduler:', e.message); }
+        try { const m = await maintenance.daily(); if (m) console.log('maintenance:', JSON.stringify(m)); } catch (e) { console.error('maintenance:', e.message); }
+        timer = setTimeout(tick, intervalMs);
+    };
     timer = setTimeout(tick, 15000);
 }
 

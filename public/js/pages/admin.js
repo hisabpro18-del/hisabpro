@@ -21,10 +21,37 @@ HP.page('/admin', {
             ${ui.statCard({ label: 'In grace / expired', value: `${s.grace} / ${s.expired}`, iconName: 'alert', tone: 'bad', valueTone: s.expired ? 'bad' : '' })}
             ${ui.statCard({ label: 'Users · Desktop PCs', value: `${s.users} · ${s.devices}`, iconName: 'users', tone: 'good' })}
           </div>
+          <div class="mt-6" data-storage></div>
           <div class="card mt-6"><div class="flex items-center justify-between px-5 py-4 border-b border-line"><div class="font-semibold">Recent activity</div><a href="/admin/activity" data-link class="text-sm text-muted hover:text-ink">View all</a></div>
             <div class="divide-y divide-line-soft">${s.recent.length ? s.recent.map(r => html`<div class="flex items-start justify-between gap-4 px-5 py-3 text-sm"><div><div>${r.summary}</div><div class="text-xs text-muted">${r.userEmail} · ${r.action}</div></div><div class="whitespace-nowrap text-xs text-muted">${fmt.dateTime(r.createdAt)}</div></div>`) : html`<div class="px-5 py-8 text-center text-sm text-muted">No activity yet.</div>`}</div></div>`);
+        storageCard(el.querySelector('[data-storage]'));
     },
 });
+
+// database size against the plan's limit, the biggest tables, and a "clean up now" button
+const mb = b => `${(b / 1048576).toFixed(b < 10485760 ? 1 : 0)} MB`;
+async function storageCard(box, st) {
+    if (!box) return;
+    try { st = st || await api.get('/api/admin/storage'); } catch (e) { ui.mount(box, html`<div class="card p-5 text-sm text-muted">Storage: ${e.message}</div>`); return; }
+    const tone = st.level === 'danger' ? 'bg-red-500' : st.level === 'warning' ? 'bg-amber-500' : 'bg-emerald-500';
+    const r = st.retention || {};
+    ui.mount(box, html`<div class="card">
+        <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-line">
+          <div><div class="font-semibold">Database storage</div><div class="text-xs text-muted">Supabase plan limit ${mb(st.limitBytes)} · cleaned automatically every day</div></div>
+          <button class="btn btn-sm btn-outline" data-clean>${icon('refresh')}Clean up now</button></div>
+        <div class="px-5 py-4">
+          <div class="flex items-baseline justify-between text-sm"><span><b class="text-lg">${mb(st.bytes)}</b> <span class="text-muted">of ${mb(st.limitBytes)} used</span></span><span class="${st.level === 'ok' ? 'text-muted' : st.level === 'warning' ? 'text-amber-600 font-semibold' : 'text-red-600 font-semibold'}">${st.percent}%</span></div>
+          <div class="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-line-soft" role="progressbar" aria-valuenow="${st.percent}" aria-valuemin="0" aria-valuemax="100" aria-label="Database storage used"><div class="h-full ${tone}" style="width:${Math.min(100, st.percent)}%"></div></div>
+          ${st.level !== 'ok' ? html`<p class="mt-3 rounded-lg border ${st.level === 'danger' ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-800'} px-3 py-2 text-sm">${st.level === 'danger' ? 'The database is almost full. Upgrade the Supabase plan soon — when it is full, saving stops.' : 'The database is filling up. Plan an upgrade of the Supabase plan.'}</p>` : ''}
+          <div class="mt-4 grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2">${st.tables.slice(0, 8).map(t => html`<div class="flex justify-between gap-3 border-b border-line-soft py-1"><span class="truncate">${t.name}</span><span class="whitespace-nowrap text-muted">${mb(t.bytes)} · ${t.rows.toLocaleString('en-US')} rows</span></div>`)}</div>
+          <p class="mt-3 text-xs text-muted">Kept: sales, stock, khata and all shop records for ever. Cleaned: PC sync log after ${r.syncLogDays} days, activity log after ${r.auditDays} days, message history after ${r.messageDays} days, removed held carts after ${r.heldDays} days.${st.lastCleanup ? ` Last clean-up ${fmt.dateTime(st.lastCleanup.at)}.` : ''}</p>
+        </div></div>`);
+    box.querySelector('[data-clean]').addEventListener('click', async e => {
+        e.currentTarget.disabled = true;
+        try { const out = await api.post('/api/admin/maintenance'); ui.toast(`Cleaned: ${out.changeLog + out.audit + out.messages + out.held} old rows removed`); storageCard(box, { ...out.storage, lastCleanup: { at: new Date().toISOString() } }); }
+        catch (err) { ui.fail(err); e.currentTarget.disabled = false; }
+    });
+}
 
 // ── clients ──
 function clientForm(onDone) {
