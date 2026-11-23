@@ -14,7 +14,8 @@ const LAYOUT = [
 ];
 const TABS = [['company', 'Company Profile', 'building'], ['receipt', 'Receipt & POS', 'receipt'], ['localization', 'Localization', 'globe']];
 // the Windows app also gets "App update" (one click to install a new version)
-const tabsHere = () => (HP.updates && HP.updates.available() ? [...TABS, ['update', 'App update', 'download']] : TABS);
+// … and the Android app gets "Phone app" (Bluetooth receipt printer, app version)
+const tabsHere = () => [...TABS, ...(HP.updates && HP.updates.available() ? [['update', 'App update', 'download']] : []), ...(HP.native && HP.native.isApp() ? [['phone', 'Phone app', 'smartphone']] : [])];
 
 const subCard = (title, sub, body) => html`<div class="rounded-xl border border-line p-5"><div class="font-semibold">${title}</div><div class="mb-4 mt-0.5 text-xs text-muted">${sub}</div>${body}</div>`;
 const choiceCard = (name, value, cur, iconName, title, caption, compact) => html`<button type="button" data-choice="${name}" data-v="${value}" aria-pressed="${value === cur ? 'true' : 'false'}"
@@ -96,9 +97,10 @@ HP.page('/settings', {
                 <div><h1 class="text-2xl font-bold tracking-tight">${t('Settings')}</h1><p class="mt-1 text-sm text-muted">Core business configuration — modular ERP settings engine</p></div></div>
               <div class="grid items-start gap-6 lg:grid-cols-[260px_1fr]">
                 <div class="card p-2">${tabsHere().map(([v, l, ic]) => html`<button type="button" data-tab="${v}" class="flex w-full items-center gap-3 rounded-lg px-4 h-11 text-sm ${v === tab ? 'bg-accent-soft font-semibold text-accent' : 'hover:bg-surface-2'}">${icon(ic, 'w-4 h-4')}${l}</button>`)}</div>
-                <div class="card p-6 sm:p-8" data-panel>${tab === 'company' ? company() : tab === 'receipt' ? receipt() : tab === 'update' ? '' : localization()}</div>
+                <div class="card p-6 sm:p-8" data-panel>${tab === 'company' ? company() : tab === 'receipt' ? receipt() : tab === 'update' || tab === 'phone' ? '' : localization()}</div>
               </div>`);
             if (tab === 'update') HP.updates.card(el.querySelector('[data-panel]'));
+            if (tab === 'phone') HP.native.settingsCard(el.querySelector('[data-panel]'));
         }
         // keep what was typed when a choice card re-draws the receipt tab
         const keepReceipt = () => {

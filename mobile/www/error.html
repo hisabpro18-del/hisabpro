@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- Shown by the Android app when the HisabPro server cannot be reached (no internet, server down). -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HisabPro — offline</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; font-family: system-ui, sans-serif; background: #f4f4f2; color: #1f2937; }
+  @media (prefers-color-scheme: dark) { body { background: #0f1115; color: #e5e7eb; } .card { background: #1b1f27 !important; } }
+  .card { background: #fff; border-radius: 20px; padding: 32px 24px; margin: 16px; max-width: 360px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.08); }
+  h1 { font-size: 20px; margin: 12px 0 6px; } p { font-size: 14px; line-height: 1.5; opacity: .8; margin: 6px 0; }
+  .ur { direction: rtl; font-size: 16px; }
+  button { margin-top: 20px; width: 100%; height: 48px; border: 0; border-radius: 12px; background: #4f46e5; color: #fff; font-size: 16px; font-weight: 600; }
+</style></head>
+<body><div class="card">
+  <div style="font-size:44px">📶</div>
+  <h1>No internet connection</h1>
+  <p>HisabPro on this phone needs internet. Check Wi-Fi or mobile data, then try again.</p>
+  <p class="ur">انٹرنیٹ کنکشن نہیں ہے۔ وائی فائی یا موبائل ڈیٹا چیک کریں اور دوبارہ کوشش کریں۔</p>
+  <p style="font-size:12px">For selling without internet, use the HisabPro Windows app at the counter.</p>
+  <button type="button" id="retry">Try again · دوبارہ کوشش کریں</button>
+</div>
+<script>
+  document.getElementById('retry').addEventListener('click', function () { location.href = 'https://hisabpro-2r1x.onrender.com/'; });
+  window.addEventListener('online', function () { location.href = 'https://hisabpro-2r1x.onrender.com/'; });
+</script></body></html>

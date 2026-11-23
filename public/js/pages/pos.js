@@ -43,8 +43,21 @@ HP.page('/pos', {
         ui.mount(el, html`<div class="-mx-4 -my-6 flex flex-col sm:-mx-6 md:h-[calc(100%+3rem)] md:min-h-[560px] md:flex-row" data-pos>
             <section class="min-w-0 flex-1 px-4 py-6 sm:px-6 md:overflow-y-auto thin-scroll" data-left></section>
             <aside class="flex w-full shrink-0 flex-col border-t border-line bg-surface md:max-w-[460px] md:overflow-y-auto md:border-s md:border-t-0 thin-scroll" data-right></aside>
-          </div>`);
-        const left = el.querySelector('[data-left]'), right = el.querySelector('[data-right]');
+          </div>
+          <div class="fixed inset-x-0 bottom-0 z-30 hidden border-t border-line bg-surface/95 px-4 py-2.5 shadow-lg backdrop-blur md:!hidden" data-cartbar></div>`);
+        const left = el.querySelector('[data-left]'), right = el.querySelector('[data-right]'), cartbar = el.querySelector('[data-cartbar]');
+        // phone only: item count, total and a button that scrolls down to the sale (hidden while the sale is on screen)
+        function drawCartBar(tt) {
+            const n = cart.lines.length;
+            cartbar.classList.toggle('hidden', !n || cartbarHidden);
+            if (!n) return;
+            cartbar.innerHTML = String(html`<div class="flex items-center gap-3"><div class="min-w-0 flex-1"><div class="text-xs text-muted">${n} ${n === 1 ? t('item') : t('items')}</div><div class="text-lg font-bold">${fmt.money(tt.total)}</div></div>
+                <button type="button" class="btn btn-primary h-11 px-5" data-gocart>${icon('cart')}${t('Cart')}</button></div>`);
+        }
+        let cartbarHidden = false;
+        const seen = 'IntersectionObserver' in window ? new IntersectionObserver(es => { cartbarHidden = es.some(e => e.isIntersecting); drawCartBar(totals()); }, { threshold: 0.15 }) : null;
+        if (seen) seen.observe(right);
+        cartbar.addEventListener('click', e => { if (e.target.closest('[data-gocart]')) right.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
 
         const filtered = () => catalog.filter(p => (cat === 'ALL' || p.categoryId === cat) && (!q || [p.name, p.sku, p.barcode, p.formula].some(v => String(v || '').toLowerCase().includes(q.toLowerCase()))));
         const inCart = id => cart.lines.filter(l => l.productId === id).reduce((s, l) => s + l.qty / (l.factor || 1), 0);
@@ -57,8 +70,8 @@ HP.page('/pos', {
                 <div class="flex flex-wrap items-center gap-2">${ui.seg('price', [['RETAIL', 'Retail price'], ['WHOLESALE', 'Wholesale price']], P.wholesale ? 'WHOLESALE' : 'RETAIL')}${ui.seg('view', [['VISUAL', 'Visual / Touch'], ['RETAIL', 'Retail / Barcode']], P.view)}
                   <button class="btn btn-outline" data-held>${t('View Held Sales')}</button></div></div>
               <div class="relative mb-3"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span>
-                <input class="input h-11 ps-9 pe-12" placeholder="${t('Search / Barcode / Formula — 24*code adds 24')}" data-search value="${q}" autocomplete="off"><span class="kbd absolute end-3 top-3">F1</span></div>
-              <div class="mb-4 flex flex-wrap gap-2"><button class="chip ${cat === 'ALL' ? 'chip-on' : ''}" data-cat="ALL">${t('All')}</button>${cats.map(c => html`<button class="chip ${cat === c.id ? 'chip-on' : ''}" data-cat="${c.id}">${c.name}</button>`)}</div>
+                <input class="input h-11 ps-9 pe-12" placeholder="${t('Search / Barcode / Formula — 24*code adds 24')}" data-search value="${q}" autocomplete="off">${HP.native && HP.native.isApp() ? html`<button type="button" class="btn-icon absolute end-1 top-1 !h-9 !w-9 border-0" data-camscan aria-label="${t('Scan with camera')}" title="${t('Scan with camera')}">${icon('camera')}</button>` : html`<span class="kbd absolute end-3 top-3">F1</span>`}</div>
+              <div class="thin-scroll -mx-4 mb-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0"><button class="chip shrink-0 ${cat === 'ALL' ? 'chip-on' : ''}" data-cat="ALL">${t('All')}</button>${cats.map(c => html`<button class="chip shrink-0 ${cat === c.id ? 'chip-on' : ''}" data-cat="${c.id}">${c.name}</button>`)}</div>
               <div data-products>${productsHtml(list)}</div>`);
         }
         function productsHtml(list) {
@@ -81,6 +94,7 @@ HP.page('/pos', {
 
         function drawRight() {
             const tt = totals();
+            drawCartBar(tt);
             const credit = cart.mode === 'CREDIT';
             const has = cart.lines.length > 0;
             right.innerHTML = String(html`
@@ -339,6 +353,7 @@ HP.page('/pos', {
             const d = b.dataset;
             if (d.add) return pick(byId[d.add]);
             if (d.cat) { cat = d.cat; drawLeft(); return; }
+            if (b.closest('[data-camscan]')) { HP.native.scan().then(code => { if (code && scan(code)) refreshProducts(); }).catch(err => ui.fail(err)); return; }
             if (b.closest('[data-seg=view]') && d.v) { P.view = d.v; savePrefs(P); drawLeft(); return; }
             if (b.closest('[data-seg=price]') && d.v) { P.wholesale = d.v === 'WHOLESALE'; savePrefs(P); repriceAll(); draw(); return; }
             if (d.recvcust !== undefined && cart.customer) return HP.khata.receiveDialog(cart.customer, r => { cart.customer.balance = r.balance; drawRight(); });
@@ -410,6 +425,6 @@ HP.page('/pos', {
         draw();
         if (cart.customer) loadLastPrices(cart.customer.id);
         setTimeout(() => left.querySelector('[data-search]')?.focus(), 50);
-        return () => { document.removeEventListener('keydown', onKey); if (custAc) custAc.destroy(); posDraft = cart.lines.length ? cart : null; };
+        return () => { document.removeEventListener('keydown', onKey); if (seen) seen.disconnect(); if (custAc) custAc.destroy(); posDraft = cart.lines.length ? cart : null; };
     },
 });

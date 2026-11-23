@@ -5,6 +5,9 @@ Multi-tenant POS with khata (customer credit), inventory, purchasing, finance, r
 - **Web** (any device, online): owners, managers, cashiers and the HisabPro super admin.
 - **Windows desktop app** (`HisabPro Setup.exe`): runs the same app on the shop PC with a local database, **keeps selling
   offline**, and syncs with the cloud whenever the internet is available.
+- **Android app** (prepared, build not finalised — [docs/ANDROID.md](docs/ANDROID.md)): the shop owner's ledger app —
+  Payment, Receipt, Reports, All Accounts, Stock, Vendor Reports and Reminders, with Bluetooth slip printing. Owner only;
+  needs internet.
 
 Every client sees its own shop name and logo in the app and on bills (e.g. "Minha traders"); HisabPro is the platform name.
 

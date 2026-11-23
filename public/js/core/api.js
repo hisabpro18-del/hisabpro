@@ -35,11 +35,7 @@
         const res = await fetch(path, { headers: { Authorization: 'Bearer ' + token() } });
         if (!res.ok) { let m = 'Download failed.'; try { m = (await res.json()).error || m; } catch { } throw new Error(m); }
         const blob = await res.blob();
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename || (res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'download';
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        HP.ui.saveBlob(blob, filename || (res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'download');
     }
 
     // query string from an object (skips empty values)

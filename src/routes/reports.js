@@ -7,6 +7,7 @@ const { N } = require('../lib/money');
 const { authenticate, can } = require('../auth');
 const dates = require('../lib/dates');
 const reports = require('../services/reports');
+const ledger = require('../services/ledger');
 const settings = require('../services/settings');
 const syncState = require('../sync/state');
 const config = require('../config');
@@ -315,6 +316,36 @@ router.get('/reminders', VIEW, async (req, res) => {
         lowStock: low,
         expiring: exp.map(x => ({ ...x, tier: x.daysLeft < 0 ? 'expired' : x.daysLeft <= days ? 'urgent' : 'upcoming', valueRisk: x.value })),
         customers: recv.parties, suppliers: pay.parties,
+    });
+});
+
+// ── vendor report (the Android app's "Vendor Reports"): per vendor, within the period, what was bought, returned and
+// paid, and what is owed now. Vendor khata: credit = we owe more (purchase), debit = we owe less (payment, return).
+router.get('/vendors', VIEW, async (req, res) => {
+    const t = req.user.tenantId;
+    const r = await reports.rangeFor(t, req.query);
+    const vendors = await prisma.party.findMany({ where: { tenantId: t, type: 'VENDOR', deletedAt: null }, select: { id: true, name: true, phone: true }, orderBy: { name: 'asc' } });
+    const ids = vendors.map(v => v.id);
+    const [bal, sums] = ids.length ? await Promise.all([
+        ledger.balances(t, { partyIds: ids, type: 'VENDOR' }),
+        prisma.ledgerEntry.groupBy({ by: ['partyId', 'type'], where: { tenantId: t, deletedAt: null, partyId: { in: ids }, date: { gte: r.from, lt: r.to } }, _sum: { debit: true, credit: true } }),
+    ]) : [{}, []];
+    const per = new Map(ids.map(id => [id, { purchased: 0, returned: 0, paid: 0 }]));
+    for (const s of sums) {
+        const v = per.get(s.partyId);
+        const debit = N(s._sum.debit || 0), credit = N(s._sum.credit || 0);
+        if (s.type === 'PURCHASE') v.purchased += credit - debit;
+        else if (s.type === 'PURCHASE_RETURN') v.returned += debit - credit;
+        else if (s.type === 'PAYMENT_OUT' || s.type === 'CHEQUE') v.paid += debit - credit;
+    }
+    const rows = vendors.map(v => ({ id: v.id, name: v.name, phone: v.phone, ...per.get(v.id), balance: bal[v.id] || 0 }))
+        .filter(v => v.purchased || v.returned || v.paid || v.balance)
+        .sort((a, b) => b.balance - a.balance || b.purchased - a.purchased);
+    const sum = k => rows.reduce((a, v) => a + v[k], 0);
+    res.json({
+        range: rangeView(r),
+        totals: { purchased: sum('purchased'), returned: sum('returned'), paid: sum('paid'), payable: rows.reduce((a, v) => a + Math.max(0, v.balance), 0), advance: rows.reduce((a, v) => a + Math.max(0, -v.balance), 0), vendors: rows.length },
+        vendors: rows,
     });
 });
 

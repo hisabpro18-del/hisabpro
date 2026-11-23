@@ -148,11 +148,7 @@ function downloadDataUrl(url, filename) {
     if (!m) return ui.toast('The file could not be opened.', 'error');
     const bin = atob(m[2]), bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([bytes], { type: m[1] }));
-    a.download = filename || 'document';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    ui.saveBlob(new Blob([bytes], { type: m[1] }), filename || 'document');
 }
 
 // ════════════════════════ HR Dashboard ════════════════════════

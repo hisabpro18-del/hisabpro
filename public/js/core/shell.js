@@ -94,6 +94,7 @@
         if (net.desktop && net.problems) return html`<span class="badge badge-warn" title="${net.problems} change(s) were refused by the HisabPro server. Contact HisabPro.">${icon('alert', 'w-3.5 h-3.5')}Sync problems: ${net.problems}</span>`;
         if (!net.online) return html`<span class="badge badge-bad badge-dot" title="${net.desktop ? 'Sales are saved on this PC and sent when the internet is back' : 'No internet connection'}">${t('Offline')}${net.pending ? ` · ${net.pending} waiting` : ''}</span>`;
         if (net.pending) return html`<span class="badge badge-warn badge-dot">${t('Syncing')} · ${net.pending}</span>`;
+        if (isMobile()) return ''; // the phone app: nothing to say while online
         return html`<span class="badge badge-good badge-dot">${t('Live / Online')}</span>`;
     }
     function setNet(patch) { Object.assign(net, patch); const el = document.getElementById('net-pill'); if (el) el.innerHTML = String(netPill()); }
@@ -112,16 +113,40 @@
         return html`${parts}`;
     }
 
-    function render(path) {
+    // the phone app (owner's ledger screens): back arrow, title, language, settings — no sidebar
+    const isMobile = () => !!(HP.mobile && HP.mobile.on());
+    function mobileTopbar(path, def) {
+        const home = path === '/m';
+        const ur = HP.lang() === 'ur';
+        return html`<div class="flex h-14 items-center gap-2 border-b border-line bg-topbar px-3">
+            ${home ? html`<img src="/img/logo.svg" alt="" class="h-8 w-8 rounded-lg">` : html`<button type="button" class="btn-icon border-0" data-m-back aria-label="${t('Back')}">${icon('chevronLeft', 'w-5 h-5 rtl:rotate-180')}</button>`}
+            <div class="min-w-0 flex-1 truncate text-base font-semibold">${home ? 'HisabPro' : t(def ? def.title : '')}</div>
+            <div id="net-pill">${netPill()}</div>
+            <div class="seg !bg-topbar"><button type="button" data-lang="en" class="${!ur ? 'on' : ''}">EN</button><button type="button" data-lang="ur" class="${ur ? 'on' : ''}">اردو</button></div>
+            ${home ? html`<a href="/m/settings" data-link class="btn-icon" aria-label="${t('Settings')}">${icon('settings')}</a>` : ''}</div>`;
+    }
+    function render(path, def) {
         const app = document.getElementById('app');
-        if (!framed) {
+        const mode = isMobile() ? 'mobile' : 'full';
+        // listeners live on #app, which stays the same element across sign-outs: bind them once
+        if (!app.dataset.bound) { bind(app); app.dataset.bound = '1'; }
+        if (mode === 'mobile') {
+            if (framed !== 'mobile') {
+                app.innerHTML = String(html`<div class="flex h-full flex-col"><div id="banner"></div><header id="topbar" class="shrink-0"></header>
+                  <main id="page" class="flex-1 overflow-y-auto thin-scroll px-4 pb-10 pt-4"></main></div>`);
+                framed = 'mobile';
+            }
+            document.getElementById('topbar').innerHTML = String(mobileTopbar(path, def));
+            document.getElementById('banner').innerHTML = String(banner());
+            return;
+        }
+        if (framed !== 'full') {
             app.innerHTML = String(html`<div class="flex h-full">
               <div class="fixed inset-0 z-30 bg-black/30 hidden" data-nav-scrim></div>
               <aside id="sidebar" class="fixed inset-y-0 start-0 z-40 flex w-64 -translate-x-full flex-col border-e border-line bg-surface transition-transform lg:static lg:translate-x-0 rtl:translate-x-full rtl:lg:translate-x-0"></aside>
               <div class="flex min-w-0 flex-1 flex-col"><div id="banner"></div><header id="topbar"></header><main id="page" class="flex-1 overflow-y-auto thin-scroll px-4 py-6 sm:px-6"></main></div>
             </div>`);
-            framed = true;
-            bind(app);
+            framed = 'full';
         }
         document.getElementById('sidebar').innerHTML = String(sidebar(path));
         document.getElementById('topbar').innerHTML = String(topbar());
@@ -146,6 +171,12 @@
                 return;
             }
             if (e.target.closest('[data-signout]')) return HP.app.signOut();
+            if (e.target.closest('[data-m-back]')) {
+                // back within the app's own history, else one level up (/m/accounts/x → /m/accounts → /m)
+                if (history.state && history.state.prev) history.back();
+                else HP.router.navigate(location.pathname.replace(/\/[^/]+$/, '') || '/m', { replace: true });
+                return;
+            }
             if (e.target.closest('[data-palette-open]')) return HP.palette.show();
             if (e.target.closest('[data-back-admin]')) return HP.app.backToAdmin();
             if (e.target.closest('[data-menu-toggle]')) return toggleMobile(!mobileOpen);
@@ -159,7 +190,7 @@
             }
         });
     }
-    function reset() { framed = false; }
+    function reset() { framed = null; }
 
     HP.shell = { render, reset, setNet, applyTheme, NAV, PALETTES, can };
 })();

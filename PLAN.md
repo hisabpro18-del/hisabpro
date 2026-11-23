@@ -112,6 +112,7 @@ Field-level detail for every screen and form: [reference/REFERENCE.md](reference
 | 7 | Go live | Code review (3 reviewers, 54 bugs fixed), automated tests, demo data, docs; Render + Supabase (Singapore) live at hisabpro-2r1x.onrender.com | ✅ Live. Still open: own domain, code-signing certificate |
 | 7b | Fit the free 500 MB database (added) | Daily clean-up of housekeeping rows (sync log 14 days, activity log and message history 1 year), PC resync from a fresh copy, size caps on photos / logo / files / held carts, storage card for the super admin | ✅ Done (175 tests) |
 | 7c | One-click app updates (added) | Settings → App update in the Windows app: check, download, restart & install from GitHub releases; quiet check on start and every 6 hours | ✅ Done |
+| 7d | Android app (added) | The owner's ledger app (Capacitor, on the live server): Payment, Receipt, Reports, All Accounts, Stock, Vendor Reports, Reminders; owner only; Bluetooth slip printing, Android print, share sheet, offline page, update notice — [docs/ANDROID.md](docs/ANDROID.md) | 🟡 Prepared; build, signing key and device tests still to do |
 
 Each phase ends with its tests passing and a run in the real app (web, and from phase 3 the desktop app offline and online).
 

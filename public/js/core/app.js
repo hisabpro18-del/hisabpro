@@ -76,6 +76,18 @@
         });
     }
 
+    // the phone app is for the shop owner only
+    function showOwnerOnly() {
+        app().innerHTML = String(centered(html`<div class="flex flex-col items-center text-center">
+            <img src="/img/logo.svg" alt="HisabPro" class="mb-5 h-16 w-16 rounded-2xl shadow-sm">
+            <h1 class="text-xl font-bold">${t('This app is for the shop owner')}</h1>
+            <p class="mt-2 text-sm text-muted">${t('Staff use HisabPro on the shop computer or the website. Sign in here with the owner\'s account.')}</p>
+            <p class="mt-2 text-sm text-muted">یہ ایپ صرف دکان کے مالک کے لیے ہے۔ عملہ دکان کے کمپیوٹر یا ویب سائٹ پر HisabPro استعمال کرے۔</p>
+            <button type="button" class="btn btn-primary btn-lg mt-6 w-full" data-out>${t('Sign out')}</button></div>`));
+        bindThemeButtons(app());
+        app().querySelector('[data-out]').addEventListener('click', signOut);
+    }
+
     function showActivation(message) {
         app().innerHTML = String(centered(html`
           <div class="flex items-center gap-3"><img src="/img/logo.svg" class="h-12 w-12 rounded-xl" alt=""><div><h1 class="text-xl font-bold">Set up this PC</h1><p class="text-sm text-muted">HisabPro desktop · works offline, syncs when online</p></div></div>
@@ -109,6 +121,7 @@
     function home() {
         const s = HP.session;
         if (!s) return '/';
+        if (HP.mobile && HP.mobile.on()) return '/m'; // the phone app (owners only, checked in start())
         if (s.role === 'SUPER_ADMIN' && !s.impersonatedBy) return '/admin';
         if (Perms.has(s, 'reports.view')) return '/dashboard';
         if (Perms.has(s, 'sales.create')) return '/pos';
@@ -134,6 +147,7 @@
             app().querySelector('[data-retry]').addEventListener('click', () => location.reload());
             return;
         }
+        if (HP.mobile && HP.mobile.on() && HP.session.role !== 'OWNER') return showOwnerOnly();
         if (HP.session.mustChangePassword && !desktop) return showChangePassword();
         if (desktop) HP.shell.setNet({ desktop: true, online: desktop.online, pending: desktop.pending, revoked: desktop.revoked });
         HP.shell.reset();

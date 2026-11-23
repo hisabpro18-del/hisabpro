@@ -9,7 +9,7 @@ use the table of contents.
 > [§2.3](#23-accounts-and-who-owns-them)) and keep them in a password manager. Never commit a secret; `.env` and `render.env` are
 > git-ignored for that reason.
 
-_Last updated: 2026-11-22 · app version 1.0.0 · 175 automated tests passing_
+_Last updated: 2026-11-23 · Windows app 1.0.0 · Android app prepared (not built) · 183 automated tests passing_
 
 ---
 
@@ -47,14 +47,16 @@ and logo** in the app and on every bill (e.g. "Minha Traders"); HisabPro is only
 The screens, layouts and flows follow the reference product KhataPOS (layout and flow only; own name, code and branding).
 The screen-by-screen specification copied from it is [reference/REFERENCE.md](../reference/REFERENCE.md).
 
-### 1.1 Two ways to use it
+### 1.1 Three ways to use it
 
-| | Web app | Windows desktop app |
-|---|---|---|
-| Who | Super admin, shop owners, managers, cashiers | The shop's counter PC |
-| Where it runs | Browser → `https://hisabpro-2r1x.onrender.com` | Installed `.exe`; the same app runs **inside the PC** with a local SQLite database |
-| Internet | Needed | **Not needed for selling.** Syncs with the cloud whenever online |
-| Updates | Every push to `main` deploys | **Settings → App update** (one click; from GitHub releases) |
+| | Web app | Windows desktop app | Android app (prepared, not built yet) |
+|---|---|---|---|
+| Who | Super admin, shop owners, managers, cashiers | The shop's counter PC | Shop owner's phone (owner only) |
+| Where it runs | Browser → `https://hisabpro-2r1x.onrender.com` | Installed `.exe`; the same app runs **inside the PC** with a local SQLite database | APK; the owner's ledger app: Payment, Receipt, Reports, All Accounts, Stock, Vendor Reports, Reminders (no POS) |
+| Internet | Needed | **Not needed for selling.** Syncs with the cloud whenever online | Needed |
+| Updates | Every push to `main` deploys | **Settings → App update** (one click; from GitHub releases) | Screens update with the web; new APK only for native changes (Settings → Phone app) |
+
+The Android app has its own guide: [docs/ANDROID.md](ANDROID.md).
 
 ### 1.2 Who does what
 
@@ -101,7 +103,7 @@ User-facing guide for shops: [docs/USER-GUIDE.md](USER-GUIDE.md).
 | **Live app** (web) | https://hisabpro-2r1x.onrender.com | Health check: `/healthz` → `{"ok":true,"mode":"cloud"}` |
 | **Source code** | https://github.com/hisabpro18-del/hisabpro | **Public.** Branch `main` = production |
 | **Windows app releases** | https://github.com/hisabpro18-del/hisabpro/releases | Installed PCs update from here. Share the latest release link with new shops |
-| Latest installer | https://github.com/hisabpro18-del/hisabpro/releases/latest | `HisabPro-Setup-<version>.exe` |
+| Latest installer | https://github.com/hisabpro18-del/hisabpro/releases/latest | `HisabPro-Setup-<version>.exe` (Windows releases are tagged `v…`; Android APKs will be tagged `android-v…`) |
 | **Render** (app hosting) | https://dashboard.render.com → service **hisabpro** | Web service, region **Singapore**, auto-deploys `main` |
 | **Supabase** (database) | https://supabase.com/dashboard/project/wprrcbvrxeuvfptgwvkp | Postgres, region **Singapore (ap-southeast-1)**, **free plan (500 MB)** |
 | Supabase (old, unused) | project `rnrdogvpzoowvykttqfq` (Tokyo) | Created first, never used for production. Safe to delete |
@@ -277,12 +279,19 @@ exist: everything has to work on Postgres **and** SQLite, and on several offline
 │   ├── vendor/                copied libraries and fonts (git-ignored)
 │   ├── img/                   logo
 │   └── js/
-│       ├── shared/            used by server AND browser: calc.js (money/tax maths), permissions.js, plans.js, access.js
+│       ├── shared/            used by server AND browser: calc.js (money/tax maths), permissions.js, plans.js, access.js,
+│       │                      escpos.js (thermal-printer encoder for the Android app)
 │       ├── core/              html, icons, fmt, i18n (+ i18n-ur.js dictionary), api, ui (kit), router, shell (layout,
 │       │                      sidebar, top bar), app (start-up, login, activation), print, whatsapp, palette,
-│       │                      updates (Windows app updates), theme-boot
+│       │                      updates (Windows app updates), native (Android app helpers), theme-boot
 │       └── pages/             one file per module; concatenated into /js/pages.bundle.js by src/routes/pages.js
 ├── styles/app.css             Tailwind source: theme tokens (light/dark), component classes
+├── mobile/                    Android app (Capacitor 8) — see docs/ANDROID.md
+│   ├── capacitor.config.json  app id, live server URL, offline page, user agent
+│   ├── release.json           newest released APK (read by GET /api/mobile/android)
+│   ├── www/                   offline page shown when the server cannot be reached
+│   ├── assets/                icon / splash sources
+│   └── android/               Gradle project; our plugin in app/src/main/java/com/hisabpro/app/HpNativePlugin.java
 ├── desktop/
 │   ├── main.js                Electron main: env setup, starts server.js in-process, window, printing, updates
 │   ├── preload.js             window.hpDesktop bridge (print, info, updates)
@@ -516,6 +525,8 @@ All paths start with the mount. Auth = signed-in user unless noted; the permissi
 | `/api/onboarding` (onboarding.js) | `GET /` (getting-started checklist state) |
 | `/api` (sync.js, **cloud only**, device token) | `GET /desktop/status` (web answer `{isDesktop:false}`) · `POST /device/activate` (owner/manager login → device token) · `POST /sync/push` · `GET /sync/pull` · `GET /sync/snapshot` |
 | `/api/desktop` (desktop.js, **desktop only**) | `GET /status` · `POST /activate` · `POST /sync` (sync now) · `POST /server` (change server address) |
+| `/api/reports` (also) | `GET /vendors` → per vendor in the period: bought, returned, paid, owed now (the phone app's Vendor Reports) |
+| `/api/mobile` (mobile.js, cloud only, public) | `GET /android` → newest APK `{ version, versionCode, url, notes }` from `mobile/release.json` |
 | `/js` (pages.js) | `GET /pages.bundle.js` (all `public/js/pages/*.js` concatenated, each in its own scope) |
 | — | `GET /healthz` |
 
@@ -607,6 +618,7 @@ Create one with `npm run db:migrate -- --name what_changed`; hand-written SQL (t
 | `whatsapp.js` | `HP.wa` click-to-send links (Urdu-safe formatting) |
 | `palette.js` | Ctrl+K quick search |
 | `updates.js` | Windows app updates (Settings → App update, notice to everyone at the PC) |
+| `native.js` | Android app only: camera scanning, Bluetooth receipt printing (receipt → picture → ESC/POS), Android print, share sheet for files, Settings → Phone app ([docs/ANDROID.md](ANDROID.md)) |
 | `theme-boot.js` | Applies dark mode / palette before first paint |
 
 **UI kit** (`HP.ui`): `pageHeader`, `statCard`, `table`, `empty`, `badge`, `field` (text, number, select, textarea,
@@ -788,7 +800,7 @@ Supabase **Pro** (8 GB) before the card turns red; then set `DB_LIMIT_MB=8192` o
 - `test/pc.js` starts a **real desktop-mode server as a child process** with its own SQLite file (`startPC`, `pcCall`,
   `waitFor`); `sync.test.js` and `maintenance.test.js` test activation, offline selling, both-way sync, revoke and resync.
 - Suites: `inventory`, `pos`, `khata`, `sync`, `desktop-modules`, `followups`, `review-core`, `purchases`, `parties`,
-  `finance`, `hrm`, `reports`, `settings`, `backup`, `maintenance`.
+  `finance`, `hrm`, `reports`, `settings`, `backup`, `maintenance`, `mobile`.
 - Write a test with every change; for sync-related changes, a desktop child-process test. Timing in desktop tests: wait
   for states with `waitFor`, never fixed sleeps.
 
@@ -1014,6 +1026,7 @@ migration rather than editing an applied one.
 | Multiple branches per client | Not built |
 | Shop-side user management | Deliberately not allowed (super admin only) |
 | Super admin 2FA | Not built — use a strong unique password |
+| Android app | Prepared (project, plugin, web side, docs, tests); still to do: build tools, signing key, first build, real-phone and printer tests — [docs/ANDROID.md](ANDROID.md) |
 
 ---
 
@@ -1026,6 +1039,8 @@ migration rather than editing an applied one.
 | 2026-11-22 | Code on GitHub (`hisabpro18-del/hisabpro`); Supabase project in Singapore; Render service live; production super admin and the first client (Minha Traders: owner + cashier) created |
 | 2026-11-22 | Stay on the free 500 MB database: daily clean-up of housekeeping rows, PC resync from a fresh copy, size caps, storage card |
 | 2026-11-22 | Windows app updates itself from GitHub releases (Settings → App update); v1.0.0 released |
+| 2026-11-23 | Android app prepared (online, Capacitor): Bluetooth printing as a picture (Urdu-safe), Android print, share sheet; back button closes dialogs first. Build not finalised yet |
+| 2026-11-23 | The phone app is the **owner's ledger app only**: Payment, Receipt, Reports, All Accounts, Stock, Vendor Reports + Reminders (owner's sketch). POS and everything else stay on the web and the Windows app |
 
 The original plan with the phase table is in [PLAN.md](../PLAN.md); short coding rules in [docs/DEV.md](DEV.md).
 

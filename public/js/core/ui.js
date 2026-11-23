@@ -55,6 +55,14 @@
     }
     const modal = o => overlay('modal', o);
     const drawer = o => overlay('drawer', o);
+    // the phone's back button (or the browser's): close the top dialog instead of leaving the page under it.
+    // true when a dialog was open (closed, or kept because it must be answered)
+    function backPressed() {
+        if (!stack.length) return false;
+        const top = stack[stack.length - 1];
+        if (!top.persistent) top.close();
+        return true;
+    }
 
     function confirm({ title = 'Are you sure?', message = '', ok = 'Confirm', danger = false } = {}) {
         return new Promise(resolve => {
@@ -121,9 +129,9 @@
     });
 
     // A drawer with a form: onSubmit(values) may return a promise; errors show in the drawer and keep it open.
-    function formDrawer({ title, subtitle, body, submit = t('Save'), onSubmit, wide, onMount, extraFooter = '' }) {
+    function formDrawer({ title, subtitle, body, submit = t('Save'), onSubmit, wide, onMount, onClose, extraFooter = '' }) {
         const d = drawer({
-            title, subtitle, wide,
+            title, subtitle, wide, onClose,
             body: html`<form data-form novalidate>${body}<div data-error class="hidden mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-200 dark:border-red-900"></div><button type="submit" class="hidden"></button></form>`,
             footer: html`${extraFooter}<button type="button" class="btn btn-outline" data-close>${t('Cancel')}</button><button type="button" class="btn btn-primary" data-submit>${submit}</button>`,
         });
@@ -291,9 +299,15 @@
         const NUM = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
         const cell = v => { let s = String(v ?? ''); if (/^[=+\-@\t\r]/.test(s) && !NUM.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; };
         const text = '﻿' + [header, ...rows].map(r => r.map(cell).join(',')).join('\n');
+        saveBlob(new Blob([text], { type: 'text/csv;charset=utf-8' }), filename);
+    }
+    // save a file made in the page: a normal download; in the Android app the share sheet (WebViews cannot download)
+    function saveBlob(blob, filename) {
+        if (HP.native && HP.native.isApp()) return HP.native.shareBlob(blob, filename).catch(e => fail(e));
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
-        a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+        a.href = URL.createObjectURL(blob);
+        a.download = filename || 'download'; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     }
     function print(safeHtml) {
         let root = $('#print-root');
@@ -301,7 +315,7 @@
         root.innerHTML = String(safeHtml);
         // let barcodes / images render before printing
         const silent = window.hpDesktop && HP.session && HP.session.settings && HP.session.settings.receipt && HP.session.settings.receipt.autoPrint;
-        setTimeout(() => { if (HP.ui.afterPrintRender) HP.ui.afterPrintRender(root); setTimeout(() => (silent ? window.hpDesktop.printSilent() : window.print()), 150); }, 50);
+        setTimeout(() => { if (HP.ui.afterPrintRender) HP.ui.afterPrintRender(root); setTimeout(() => (HP.native && HP.native.isApp() ? HP.native.print(root) : silent ? window.hpDesktop.printSilent() : window.print()), 150); }, 50);
     }
 
     // file → data: URL, shrunk to maxPx on the longer side; JPEG quality steps down until it fits in maxBytes.
@@ -342,5 +356,5 @@
         });
     }
 
-    HP.ui = { $, $$, on, mount, toast, fail, modal, drawer, confirm, field, grid, section, readForm, formDrawer, pageHeader, statCard, badge, spinner, loading, empty, table, seg, tabs, menu, closeMenus, autocomplete, rangeButton, rangePopover, presetLabel, chart, PALETTE, csv, print, readImage, readFile, css };
+    HP.ui = { $, $$, on, mount, toast, fail, modal, drawer, backPressed, confirm, field, grid, section, readForm, formDrawer, pageHeader, statCard, badge, spinner, loading, empty, table, seg, tabs, menu, closeMenus, autocomplete, rangeButton, rangePopover, presetLabel, chart, PALETTE, csv, saveBlob, print, readImage, readFile, css };
 })();

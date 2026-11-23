@@ -1,0 +1,23 @@
+{
+  "name": "hisabpro-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HisabPro Android app (Capacitor). Loads the live HisabPro server and adds camera barcode scanning, Bluetooth receipt printing and system printing. See docs/ANDROID.md.",
+  "scripts": {
+    "sync": "cap sync android",
+    "open": "cap open android",
+    "icons": "capacitor-assets generate --android --iconBackgroundColor '#ffffff' --splashBackgroundColor '#ffffff'",
+    "debug": "cap sync android && cd android && ./gradlew assembleDebug",
+    "release": "cap sync android && cd android && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/barcode-scanner": "^3.1.4",
+    "@capacitor/core": "^8.6.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
+    "@capacitor/cli": "^8.6.2"
+  }
+}

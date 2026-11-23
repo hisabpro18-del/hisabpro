@@ -19,7 +19,7 @@
     let cleanup = null, seq = 0;
     function navigate(path, { replace } = {}) {
         if (path === location.pathname + location.search && !replace) return render();
-        history[replace ? 'replaceState' : 'pushState']({}, '', path);
+        history[replace ? 'replaceState' : 'pushState']({ prev: current }, '', path); // prev: the phone app's back arrow
         render();
     }
     async function render() {
@@ -39,10 +39,12 @@
         }
         const def = m.def;
         const s = HP.session;
+        // the phone app shows only its own ledger screens (pages/mobile.js); the full app never shows them
+        if (!!(HP.mobile && HP.mobile.on()) !== !!def.mobile) return navigate(HP.app.home(), { replace: true });
         const allowed = def.super ? s.role === 'SUPER_ADMIN' : (s.role !== 'SUPER_ADMIN' || s.impersonatedBy || s.tenantId)
             && (!def.perm || [].concat(def.perm).some(k => Perms.has(s, k)));
         if (!allowed) return navigate(HP.app.home(), { replace: true });
-        HP.shell.render(path);
+        HP.shell.render(path, def);
         document.title = `${HP.t(def.title)} · ${s.tenant ? s.tenant.name : 'HisabPro'}`;
         // a fresh element per page, so listeners a page attached never pile up on the next one
         const old = document.getElementById('page');
@@ -59,7 +61,18 @@
             el.innerHTML = String(HP.html`<div class="card card-pad text-sm text-rose-600">${e.message}</div>`);
         }
     }
-    window.addEventListener('popstate', render);
+    // the address the user is on (kept up to date when pages change it themselves with history.replaceState)
+    let current = location.pathname + location.search;
+    for (const fn of ['pushState', 'replaceState']) {
+        const orig = history[fn].bind(history);
+        history[fn] = (...a) => { const r = orig(...a); current = location.pathname + location.search; return r; };
+    }
+    window.addEventListener('popstate', () => {
+        // back with a dialog open closes the dialog and stays on the page (Android back button, browser back)
+        if (HP.ui.backPressed && HP.ui.backPressed()) { history.pushState({}, '', current); return; }
+        current = location.pathname + location.search;
+        render();
+    });
     document.addEventListener('click', e => {
         const a = e.target.closest('a[data-link]');
         if (!a || e.ctrlKey || e.metaKey || e.shiftKey || a.target) return;
