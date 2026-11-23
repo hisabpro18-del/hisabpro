@@ -18,7 +18,7 @@ HP.page('/products', {
         const draw = () => {
             const rows = q ? list.filter(p => [p.name, p.sku, p.barcode, p.formula].some(v => String(v || '').toLowerCase().includes(q.toLowerCase()))) : list;
             ui.mount(el.querySelector('[data-list]'), ui.table({
-                rows, empty: { iconName: 'package', title: 'No products yet', text: 'Add your first product, or import a CSV file.', action: has('inventory.add') ? html`<button class="btn btn-primary" data-new>${icon('plus')}New product</button>` : '' },
+                rows, empty: { iconName: 'package', title: 'No products yet', text: 'Add your first product, or import your list from a spreadsheet (download the template from Import CSV).', action: has('inventory.add') ? html`<div class="flex flex-wrap justify-center gap-2"><button class="btn btn-primary" data-new>${icon('plus')}New product</button><button class="btn btn-outline" data-import>${icon('upload')}Import CSV</button></div>` : '' },
                 columns: [
                     { label: 'Name', render: p => html`<div class="flex items-center gap-3">${p.imageUrl ? html`<img src="${p.imageUrl}" class="h-9 w-9 rounded-lg object-cover border border-line" alt="">` : ''}<div><div class="font-medium">${p.name}</div><div class="text-xs text-muted">${p.sku ? `SKU: ${p.sku}` : p.variants ? `${p.variants} variants` : ''}${!p.active ? ' · inactive' : ''}</div></div></div>` },
                     { label: 'Type', render: p => html`<span class="badge badge-gray">${TYPE_LABEL[p.type]}</span>` },
@@ -251,37 +251,9 @@ function adjustStock(p, onDone) {
     });
 }
 
+// Import products from a spreadsheet (CSV) — template, column matching and preview in core/importer.js
 function importCsv(onDone) {
-    let rows = [];
-    const m = ui.modal({
-        title: 'Import Products (CSV)', width: 520,
-        body: html`<label class="flex h-40 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-line text-sm text-muted hover:bg-surface-2">${icon('upload', 'w-7 h-7 mb-2')}<span data-drop>Drop CSV here or click to browse</span><input type="file" accept=".csv,text/csv" class="hidden" data-file></label>
-          <p class="mt-3 text-xs text-muted">Columns: Name, SKU, Category, Price, Stock (header row optional)</p><div data-prev class="mt-3"></div>`,
-        footer: html`<button class="btn btn-outline" data-close>Cancel</button><button class="btn btn-primary" data-go disabled>Import 0 products</button>`,
-    });
-    const parse = text => {
-        const out = [];
-        for (const line of text.split(/\r?\n/)) {
-            if (!line.trim()) continue;
-            const cells = []; let cur = '', qd = false;
-            for (let i = 0; i < line.length; i++) { const c = line[i]; if (qd) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') qd = false; else cur += c; } else if (c === '"') qd = true; else if (c === ',') { cells.push(cur); cur = ''; } else cur += c; }
-            cells.push(cur); out.push(cells.map(s => s.trim()));
-        }
-        if (out.length && /name/i.test(out[0][0] || '') && isNaN(Number(out[0][3]))) out.shift();
-        return out.map(c => ({ name: c[0] || '', sku: c[1] || '', category: c[2] || '', price: c[3] === '' || c[3] === undefined ? '' : fmt.toPaisa(c[3]), stock: c[4] || 0 }));
-    };
-    m.el.querySelector('[data-file]').addEventListener('change', async e => {
-        const f = e.target.files[0]; if (!f) return;
-        rows = parse(await f.text());
-        m.el.querySelector('[data-drop]').textContent = f.name;
-        const go = m.el.querySelector('[data-go]'); go.disabled = !rows.length; go.textContent = `Import ${rows.length} products`;
-        ui.mount(m.el.querySelector('[data-prev]'), rows.length ? html`<div class="max-h-48 overflow-auto rounded-lg border border-line text-xs"><table class="tbl"><thead><tr><th>Name</th><th>SKU</th><th>Category</th><th class="!text-right">Price</th><th class="!text-right">Stock</th></tr></thead><tbody>${rows.slice(0, 50).map(r => html`<tr><td>${r.name}</td><td>${r.sku}</td><td>${r.category}</td><td class="num">${r.price === '' ? '' : fmt.money(r.price)}</td><td class="num">${r.stock}</td></tr>`)}</tbody></table></div>${rows.length > 50 ? html`<p class="help">…and ${rows.length - 50} more</p>` : ''}` : html`<p class="text-sm text-rose-600">No rows found in the file.</p>`);
-    });
-    m.el.querySelector('[data-go]').addEventListener('click', async e => {
-        e.target.disabled = true;
-        try { const r = await api.post('/api/inventory/products/import', { rows }); m.close(); ui.toast(`${r.imported} products imported`); onDone(); }
-        catch (err) { ui.fail(err); e.target.disabled = false; }
-    });
+    HP.importer.open({ kind: 'product', title: 'Import Products (CSV)', endpoint: '/api/inventory/products/import', noun: 'products', skipLabel: 'Skip products already in HisabPro (same SKU or barcode)', onDone });
 }
 
 // ───────── master data pages ─────────
@@ -297,7 +269,7 @@ function masterPage(path, kind, cfg) {
                     empty: { iconName: cfg.icon, title: `No ${cfg.plural} yet`, text: cfg.emptyText || '', action: has('inventory.add') ? html`<button class="btn btn-primary" data-new>${icon('plus')}${cfg.addLabel}</button>` : '' } }));
             };
             ui.mount(el, html`${ui.pageHeader({ title: cfg.title, subtitle: cfg.subtitle, actions: has('inventory.add') && !cfg.search ? html`<button class="btn btn-primary" data-new>${icon('plus')}${cfg.newLabel || 'New'}</button>` : '' })}
-              ${cfg.search ? html`<div class="mb-4 flex items-center justify-between gap-3"><div class="relative w-full max-w-md"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span><input class="input ps-9" placeholder="${cfg.search}" data-q></div>${has('inventory.add') ? html`<button class="btn btn-primary" data-new>${icon('plus')}${cfg.addLabel}</button>` : ''}</div>` : ''}
+              ${cfg.search ? html`<div class="mb-4 flex items-center justify-between gap-3"><div class="relative w-full max-w-md"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span><input class="input ps-9" placeholder="${cfg.search}" data-q></div>${has('inventory.add') ? html`<div class="flex gap-2">${cfg.importKind ? html`<button class="btn btn-outline" data-import-master>${icon('upload')}${t('Import')}</button>` : ''}<button class="btn btn-primary" data-new>${icon('plus')}${cfg.addLabel}</button></div>` : ''}</div>` : ''}
               <div data-list>${ui.loading()}</div>`);
             const qi = el.querySelector('[data-q]'); if (qi) qi.addEventListener('input', e => { q = e.target.value; draw(); });
             const form = row => {
@@ -317,6 +289,7 @@ function masterPage(path, kind, cfg) {
                 f.addEventListener('submit', save);
             };
             ui.on(el, 'click', '[data-new]', () => form(null));
+            ui.on(el, 'click', '[data-import-master]', () => HP.importer.open({ kind: cfg.importKind, title: cfg.importTitle, endpoint: `/api/inventory/master/${kind}/import`, noun: cfg.plural, skipLabel: 'Skip names already in HisabPro', onDone: load }));
             ui.on(el, 'click', '[data-edit]', (e, b) => form(list.find(r => r.id === b.dataset.edit)));
             ui.on(el, 'click', '[data-del]', async (e, b) => {
                 const r = list.find(x => x.id === b.dataset.del);
@@ -331,6 +304,7 @@ function masterPage(path, kind, cfg) {
 masterPage('/categories', 'categories', {
     title: 'Categories', plural: 'categories', icon: 'layers', subtitle: 'Master data engine for product hierarchy, POS visuals, and catalog organization.',
     search: 'Search categories...', addLabel: 'Add Category', addTitle: 'Add Category', editTitle: 'Edit Category', createLabel: 'Create Category', width: 520,
+    importKind: 'category', importTitle: 'Import Categories (CSV)',
     formSubtitle: 'Create a master category or sub-category for your catalog.',
     columns: list => [
         { label: 'Image', render: r => (r.imageUrl ? html`<img src="${r.imageUrl}" class="h-9 w-9 rounded-full object-cover border border-line" alt="">` : html`<div class="flex h-9 w-9 items-center justify-center rounded-full bg-surface-2 text-muted">${icon('image')}</div>`) },
@@ -349,6 +323,7 @@ masterPage('/categories', 'categories', {
 masterPage('/brands', 'brands', {
     title: 'Brands / Companies', plural: 'brands', icon: 'tag', subtitle: 'Manufacturer and brand master data for products, reports and purchasing.',
     search: 'Search brands...', addLabel: 'Add Brand', addTitle: 'Add Brand', editTitle: 'Edit Brand', createLabel: 'Create Brand',
+    importKind: 'brand', importTitle: 'Import Brands (CSV)',
     emptyText: 'Add the brands or companies whose products you sell.',
     columns: () => [{ label: 'Name', render: r => html`<span class="font-medium">${r.name}</span>` }, { label: 'Description', render: r => html`<span class="text-muted">${r.description || '—'}</span>` }, { label: 'Status', render: r => (r.active ? ui.badge('Active', 'good') : ui.badge('Inactive', 'gray')) }],
     fields: r => html`${ui.field({ label: 'Brand / Company Name', name: 'name', value: r.name || '', required: true, attr: { autofocus: true } })}${ui.field({ label: 'Description', name: 'description', type: 'textarea', value: r.description || '' })}${ui.field({ label: 'Active', name: 'active', type: 'switch', value: r.active !== false })}`,

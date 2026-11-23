@@ -61,7 +61,7 @@ function partyPage(type) {
                 const rows = s ? list.filter(p => c.match(p).some(v => String(v || '').toLowerCase().includes(s))) : list;
                 const toolbar = el.querySelector('[data-toolbar]');
                 toolbar.classList.toggle('hidden', !list.length);
-                if (!list.length) return ui.mount(el.querySelector('[data-list]'), html`<div class="card">${ui.empty({ iconName: c.emptyIcon, title: c.emptyTitle, text: c.emptyText, action: html`<button class="btn btn-primary" data-new>${icon('plus')}${c.firstLabel}</button>` })}</div>`);
+                if (!list.length) return ui.mount(el.querySelector('[data-list]'), html`<div class="card">${ui.empty({ iconName: c.emptyIcon, title: c.emptyTitle, text: c.emptyText, action: html`<div class="flex flex-wrap justify-center gap-2"><button class="btn btn-primary" data-new>${icon('plus')}${c.firstLabel}</button><button class="btn btn-outline" data-import>${icon('upload')}${t('Import from a spreadsheet')}</button></div>` })}</div>`);
                 ui.mount(el.querySelector('[data-list]'), ui.table({
                     rows, empty: `No ${c.one}s match "${q}".`,
                     columns: [...c.columns, { label: 'Actions', render: p => html`<div class="flex items-center gap-1 whitespace-nowrap">
@@ -78,10 +78,13 @@ function partyPage(type) {
             };
             ui.mount(el, html`${ui.pageHeader({ title: t(c.title), subtitle: c.subtitle })}
               <div class="mb-6 grid gap-4 md:grid-cols-3" data-kpis>${ui.loading()}</div>
-              <div class="hidden" data-toolbar><div class="mb-4 flex flex-wrap items-center justify-between gap-3"><div class="relative w-full max-w-md">${searchIcon()}<input class="input ps-9" placeholder="${c.search}" data-q></div><button class="btn btn-primary" data-new>${icon('plus')}${c.addLabel}</button></div></div>
+              <div class="hidden" data-toolbar><div class="mb-4 flex flex-wrap items-center justify-between gap-3"><div class="relative w-full max-w-md">${searchIcon()}<input class="input ps-9" placeholder="${c.search}" data-q></div><div class="flex gap-2"><button class="btn btn-outline" data-import>${icon('upload')}${t('Import')}</button><button class="btn btn-primary" data-new>${icon('plus')}${c.addLabel}</button></div></div></div>
               <div data-list>${html`<div class="card">${ui.loading()}</div>`}</div>`);
             el.querySelector('[data-q]').addEventListener('input', e => { q = e.target.value; draw(); });
             ui.on(el, 'click', '[data-new]', () => partyDrawer(type, null, load));
+            // customers / vendors from a spreadsheet, with their old balances (template in the dialog)
+            ui.on(el, 'click', '[data-import]', () => HP.importer.open({ kind: type === 'VENDOR' ? 'vendor' : 'customer', title: type === 'VENDOR' ? 'Import Vendors (CSV)' : 'Import Customers (CSV)',
+                endpoint: '/api/parties/import?type=' + type, noun: type === 'VENDOR' ? 'vendors' : 'customers', skipLabel: 'Skip names already in HisabPro', onDone: load }));
             ui.on(el, 'click', '[data-edit]', (e, b) => partyDrawer(type, b.dataset.edit, load));
             ui.on(el, 'click', '[data-ledger]', (e, b) => ledgerDrawer(b.dataset.ledger));
             ui.on(el, 'click', '[data-del]', async (e, b) => {

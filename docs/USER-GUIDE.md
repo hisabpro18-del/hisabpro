@@ -6,6 +6,19 @@ product or an invoice; press **?** for keyboard shortcuts.
 
 ---
 
+## 0. Bring in your lists from a spreadsheet — ڈیٹا ایکسل سے
+
+Products, categories, brands, customers (with their old udhaar) and vendors (with what you owe them) can be loaded from
+Excel instead of typing them one by one:
+
+1. Open the list (e.g. **Inventory → Products**, **Parties → Customers**) and press **Import**.
+2. **Download template** → fill it in Excel (keep the first row with the column names) → **File → Save As → CSV**.
+3. **Upload the filled file**. HisabPro shows which column went where — fix any that are wrong — and a preview.
+4. **Import**. Rows already in HisabPro (same name, SKU or barcode) are skipped, so the same file can be uploaded again.
+
+A list exported from another shop system works too: the columns are recognised by their names. Old udhaar / balances
+become the opening entry of each khata; write an advance as a minus amount.
+
 ## 1. Sell — retail and wholesale (فروخت)
 
 **POS Terminal** (left menu).

@@ -65,6 +65,60 @@ router.post('/master/:kind', ADD, async (req, res) => {
     await audit(req, { action: `inventory.${m.model}_create`, summary: `${m.label} "${row.name}" added` });
     res.json(row);
 });
+// categories / brands from a spreadsheet (core/importer.js): names unique (case-insensitive) in the file and in HisabPro;
+// a category's parent is found by name (in HisabPro or the same file) and made when missing; loops are never made.
+router.post('/master/:kind/import', ADD, async (req, res) => {
+    const kind = req.params.kind;
+    if (!['categories', 'brands'].includes(kind)) throw new HttpError(404, 'Not found.');
+    const m = master(kind);
+    const t = req.user.tenantId;
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 3000) : [];
+    if (!rows.length) throw new HttpError(400, 'The file has no rows.');
+    const skipExisting = req.body.skipExisting === true;
+    const all = await prisma[m.model].findMany({ where: { tenantId: t, deletedAt: null } });
+    const existing = new Map(all.map(r => [r.name.toLowerCase(), r]));
+    const problems = [], todo = [], seen = new Map();
+    let skipped = 0;
+    rows.forEach((r, i) => {
+        const line = Number.isInteger(r.line) && r.line > 0 ? r.line : i + 1;
+        const name = str(r.name, 80);
+        if (!name) return problems.push(`Line ${line}: the name is empty.`);
+        const k = name.toLowerCase();
+        if (seen.has(k)) return problems.push(`Lines ${seen.get(k)} and ${line} have the same name "${name}".`);
+        seen.set(k, line);
+        if (existing.has(k)) { if (skipExisting) { skipped++; return; } return problems.push(`Line ${line}: ${m.label} "${name}" already exists.`); }
+        const order = r.sortOrder === undefined || String(r.sortOrder).trim() === '' ? 0 : Number(r.sortOrder);
+        if (!Number.isFinite(order)) problems.push(`Line ${line}: the sort order "${String(r.sortOrder).slice(0, 20)}" is not a number.`);
+        todo.push({ line, name, parent: kind === 'categories' ? str(r.parent, 80) : '', description: str(r.description, 300), sortOrder: Number.isFinite(order) ? Math.max(0, Math.min(100000, Math.round(order))) : 0 });
+    });
+    if (problems.length) throw new HttpError(400, problems.slice(0, 15).join(' ') + (problems.length > 15 ? ` … and ${problems.length - 15} more.` : ''));
+    if (!todo.length) return res.json({ imported: 0, skipped });
+    const n = await withTx(t, async tx => {
+        const idOf = new Map(all.map(r => [r.name.toLowerCase(), r.id]));
+        const parentOf = new Map(all.map(r => [r.id, r.parentId || null]));
+        const made = [];
+        for (const r of todo) {
+            const row = await tx[m.model].create({ data: kind === 'categories' ? { tenantId: t, name: r.name, description: r.description, sortOrder: r.sortOrder } : { tenantId: t, name: r.name, description: r.description } });
+            idOf.set(r.name.toLowerCase(), row.id); parentOf.set(row.id, null); made.push([row, r]);
+        }
+        let extra = 0;
+        if (kind === 'categories') for (const [row, r] of made) {
+            if (!r.parent || r.parent.toLowerCase() === r.name.toLowerCase()) continue;
+            let pid = idOf.get(r.parent.toLowerCase());
+            if (!pid) { pid = (await tx.category.create({ data: { tenantId: t, name: r.parent } })).id; idOf.set(r.parent.toLowerCase(), pid); parentOf.set(pid, null); extra++; }
+            // never a loop: the new parent must not be this category or one of its own sub-categories
+            let up = pid, loop = false;
+            for (let d = 0; up && d < 50; d++) { if (up === row.id) { loop = true; break; } up = parentOf.get(up); }
+            if (loop) continue;
+            await tx.category.update({ where: { id: row.id }, data: { parentId: pid } });
+            parentOf.set(row.id, pid);
+        }
+        return made.length + extra;
+    }, { timeout: 120000 });
+    await audit(req, { action: `inventory.${m.model}_import`, summary: `${n} ${kind} imported from a file${skipped ? `, ${skipped} already in HisabPro skipped` : ''}` });
+    res.json({ imported: n, skipped });
+});
+
 router.put('/master/:kind/:id', EDIT, async (req, res) => {
     const m = master(req.params.kind);
     const cur = await prisma[m.model].findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId, deletedAt: null } });
@@ -326,43 +380,86 @@ router.get('/products/:id/movements', VIEW, async (req, res) => {
 });
 
 // CSV import: rows [{ name, sku, category, price (paisa), stock }]; categories are created by name when missing
+// Products from a spreadsheet (CSV). The browser reads the file and matches its columns to these fields (any column order,
+// common header names, or the plain Name, SKU, Category, Price, Stock order), and sends rows:
+//   { line, name, sku, barcode, category, brand, unit, price, wholesale, cost (paisa), stock, expiry (YYYY-MM-DD) }
+// skipExisting: rows whose SKU or barcode a product already has are left out (re-uploading a list adds only new ones).
 router.post('/products/import', ADD, async (req, res) => {
     const t = req.user.tenantId;
     const rows = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 5000) : [];
     if (!rows.length) throw new HttpError(400, 'The file has no rows.');
+    const skipExisting = req.body.skipExisting === true;
     const problems = [];
+    const blank = v => v === undefined || v === null || String(v).trim() === '';
+    const amount = (v, label, line) => {
+        if (blank(v)) return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0 || n > 1e13) { problems.push(`Line ${line}: the ${label} "${String(v).slice(0, 40)}" is not a number.`); return null; }
+        return Calc.round(n);
+    };
     const clean = rows.map((r, i) => {
+        const line = Number.isInteger(r.line) && r.line > 0 ? r.line : i + 1;
         const name = str(r.name, 160);
-        if (!name) problems.push(`Row ${i + 1}: the name is empty.`);
-        const price = Number(r.price), qty = Number(r.stock || 0);
-        if (r.price !== '' && r.price !== undefined && (!Number.isFinite(price) || price < 0)) problems.push(`Row ${i + 1}: the price "${r.price}" is not a number.`);
-        if (!Number.isFinite(qty) || qty < 0) problems.push(`Row ${i + 1}: the stock "${r.stock}" is not a number.`);
-        return { name, sku: str(r.sku, 60), category: str(r.category, 80), price: Number.isFinite(price) ? Calc.round(price) : 0, stock: Number.isFinite(qty) ? qty : 0 };
+        if (!name) problems.push(`Line ${line}: the name is empty.`);
+        const qty = blank(r.stock) ? 0 : Number(r.stock);
+        if (!Number.isFinite(qty) || qty < 0 || qty > 1e9) problems.push(`Line ${line}: the stock "${String(r.stock).slice(0, 40)}" is not a number.`);
+        const expiry = str(r.expiry, 10);
+        if (expiry && (!/^\d{4}-\d{2}-\d{2}$/.test(expiry) || Number.isNaN(Date.parse(expiry + 'T00:00:00Z')))) problems.push(`Line ${line}: the expiry date "${expiry}" is not a date.`);
+        return {
+            line, name, sku: str(r.sku, 60), barcode: str(r.barcode, 60), category: str(r.category, 80), brand: str(r.brand, 80), unit: str(r.unit, 20),
+            price: amount(r.price, 'price', line) || 0, wholesale: amount(r.wholesale, 'wholesale price', line), cost: amount(r.cost, 'cost', line) || 0,
+            stock: Number.isFinite(qty) && qty > 0 ? Calc.q3(qty) : 0, expiry: expiry || null,
+        };
     });
-    const skus = clean.map(r => r.sku.toLowerCase()).filter(Boolean);
-    if (new Set(skus).size !== skus.length) problems.push('The same SKU appears more than once in the file.');
-    for (const r of clean.filter(r => r.sku)) {
-        const hit = await prisma.product.findFirst({ where: { tenantId: t, deletedAt: null, sku: ci(r.sku) } });
-        if (hit && hit.sku.toLowerCase() === r.sku.toLowerCase()) problems.push(`SKU "${r.sku}" already belongs to "${hit.name}".`);
+    // codes: unique in the file, and not already used by another product (or skipped when asked)
+    const existing = await prisma.product.findMany({ where: { tenantId: t, deletedAt: null }, select: { name: true, sku: true, barcode: true } });
+    const used = { sku: new Map(), barcode: new Map() };
+    for (const p of existing) for (const f of ['sku', 'barcode']) if (p[f]) used[f].set(p[f].toLowerCase(), p.name);
+    const inFile = { sku: new Map(), barcode: new Map() };
+    let skipped = 0;
+    for (const r of clean) {
+        const taken = ['sku', 'barcode'].map(f => r[f] && used[f].get(r[f].toLowerCase()) ? [f, used[f].get(r[f].toLowerCase())] : null).find(Boolean);
+        if (taken) {
+            if (skipExisting) { r.skip = true; skipped++; continue; }
+            problems.push(`Line ${r.line}: ${taken[0] === 'sku' ? 'SKU' : 'Barcode'} "${r[taken[0]]}" is already used by "${taken[1]}".`);
+        }
+        for (const f of ['sku', 'barcode']) {
+            if (!r[f]) continue;
+            const k = r[f].toLowerCase();
+            if (inFile[f].has(k)) problems.push(`Lines ${inFile[f].get(k)} and ${r.line} have the same ${f === 'sku' ? 'SKU' : 'barcode'} "${r[f]}".`);
+            else inFile[f].set(k, r.line);
+        }
     }
-    if (problems.length) throw new HttpError(400, problems.slice(0, 20).join(' ') + (problems.length > 20 ? ` … and ${problems.length - 20} more.` : ''));
-    await limits.assertRoom(t, 'products', clean.length);
-    const pcs = await prisma.unit.findFirst({ where: { tenantId: t, deletedAt: null, shortCode: 'Pcs' } });
+    if (problems.length) throw new HttpError(400, problems.slice(0, 15).join(' ') + (problems.length > 15 ? ` … and ${problems.length - 15} more.` : ''));
+    const todo = clean.filter(r => !r.skip);
+    if (!todo.length) return res.json({ imported: 0, skipped });
+    await limits.assertRoom(t, 'products', todo.length);
     const n = await withTx(t, async tx => {
-        const cats = Object.fromEntries((await tx.category.findMany({ where: { tenantId: t, deletedAt: null } })).map(c => [c.name.toLowerCase(), c.id]));
-        for (const r of clean) {
-            let categoryId = null;
-            if (r.category) {
-                categoryId = cats[r.category.toLowerCase()];
-                if (!categoryId) { const c = await tx.category.create({ data: { tenantId: t, name: r.category } }); categoryId = cats[r.category.toLowerCase()] = c.id; }
-            }
-            const p = await tx.product.create({ data: { tenantId: t, name: r.name, sku: r.sku, categoryId, retailPrice: B(r.price), baseUnitId: pcs ? pcs.id : null } });
+        const units = await tx.unit.findMany({ where: { tenantId: t, deletedAt: null } });
+        const unitOf = new Map();
+        for (const u of units) for (const k of [u.shortCode, u.name]) if (k) unitOf.set(k.toLowerCase(), u.id);
+        const pcs = unitOf.get('pcs') || (units[0] && units[0].id) || null;
+        const cats = new Map((await tx.category.findMany({ where: { tenantId: t, deletedAt: null } })).map(c => [c.name.toLowerCase(), c.id]));
+        const brands = new Map((await tx.brand.findMany({ where: { tenantId: t, deletedAt: null } })).map(c => [c.name.toLowerCase(), c.id]));
+        const idFor = async (map, model, name) => {
+            if (!name) return null;
+            const k = name.toLowerCase();
+            if (!map.has(k)) map.set(k, (await tx[model].create({ data: { tenantId: t, name } })).id);
+            return map.get(k);
+        };
+        for (const r of todo) {
+            const p = await tx.product.create({ data: {
+                tenantId: t, type: 'STANDARD', name: r.name, sku: r.sku, barcode: r.barcode,
+                categoryId: await idFor(cats, 'category', r.category), brandId: await idFor(brands, 'brand', r.brand),
+                retailPrice: B(r.price), wholesalePrice: r.wholesale ? B(r.wholesale) : null, cost: B(r.cost),
+                baseUnitId: (r.unit && unitOf.get(r.unit.toLowerCase())) || pcs, expiryDate: r.expiry ? new Date(r.expiry + 'T00:00:00Z') : null,
+            } });
             if (r.stock) await stock.move(tx, { tenantId: t, productId: p.id, qty: r.stock, type: 'OPENING', refNo: 'CSV import', userId: req.user.id });
         }
-        return clean.length;
-    });
-    await audit(req, { action: 'inventory.product_import', summary: `${n} product(s) imported from CSV` });
-    res.json({ imported: n });
+        return todo.length;
+    }, { timeout: 180000 });
+    await audit(req, { action: 'inventory.product_import', summary: `${n} product(s) imported from a file${skipped ? `, ${skipped} already in HisabPro skipped` : ''}` });
+    res.json({ imported: n, skipped });
 });
 
 // ── the POS catalog: everything sellable, with stock, prices, units and category names ──

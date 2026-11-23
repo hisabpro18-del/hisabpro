@@ -91,6 +91,54 @@ const postOpening = (tx, tenantId, party, amount) => ledger.post(tx, {
     ...(party.type === 'VENDOR' ? { credit: amount } : { debit: amount }), date: party.createdAt,
 });
 
+// ── customers / vendors from a spreadsheet (core/importer.js), with their old balances ──
+// A balance becomes the opening khata entry (customers: what they owe you; vendors: what you owe them; a minus amount is
+// an advance). Names are unique in the file and in HisabPro (existing ones are skipped when asked).
+router.post('/import', MANAGE, async (req, res) => {
+    const t = req.user.tenantId;
+    const type = typeOf(req.query.type) || 'CUSTOMER';
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows.slice(0, 5000) : [];
+    if (!rows.length) throw new HttpError(400, 'The file has no rows.');
+    const skipExisting = req.body.skipExisting === true;
+    const existing = new Set((await prisma.party.findMany({ where: { tenantId: t, type, deletedAt: null }, select: { name: true } })).map(p => p.name.trim().toLowerCase()));
+    const blank = v => v === undefined || v === null || String(v).trim() === '';
+    const problems = [], todo = [], seen = new Map();
+    let skipped = 0;
+    rows.forEach((r, i) => {
+        const line = Number.isInteger(r.line) && r.line > 0 ? r.line : i + 1;
+        const name = str(r.name, 160);
+        if (!name) return problems.push(`Line ${line}: the name is empty.`);
+        const k = name.toLowerCase();
+        if (seen.has(k)) return problems.push(`Lines ${seen.get(k)} and ${line} have the same name "${name}".`);
+        seen.set(k, line);
+        if (existing.has(k)) { if (skipExisting) { skipped++; return; } return problems.push(`Line ${line}: a ${label(type).toLowerCase()} named "${name}" already exists.`); }
+        const balance = blank(r.balance) ? 0 : Number(r.balance);
+        if (!Number.isFinite(balance) || Math.abs(balance) > 1e13) problems.push(`Line ${line}: the old balance "${String(r.balance).slice(0, 30)}" is not a number.`);
+        const limit = blank(r.creditLimit) ? 0 : Number(r.creditLimit);
+        if (type === 'CUSTOMER' && (!Number.isFinite(limit) || limit < 0 || limit > 1e13)) problems.push(`Line ${line}: the credit limit "${String(r.creditLimit).slice(0, 30)}" is not a number.`);
+        const g = String(r.group || '').toLowerCase();
+        try {
+            const data = readParty({ name, phone: r.phone, email: r.email, notes: r.notes, address: r.address, city: r.city, contactPerson: r.contactPerson,
+                group: /whole|ہول/.test(g) ? 'WHOLESALE' : /vip/.test(g) ? 'VIP' : 'RETAIL', creditLimit: Number.isFinite(limit) ? Math.round(limit) : 0 }, type, true);
+            todo.push({ line, data, balance: Number.isFinite(balance) ? Math.round(balance) : 0 });
+        } catch (e) { problems.push(`Line ${line}: ${e.message}`); }
+    });
+    if (problems.length) throw new HttpError(400, problems.slice(0, 15).join(' ') + (problems.length > 15 ? ` … and ${problems.length - 15} more.` : ''));
+    if (!todo.length) return res.json({ imported: 0, skipped });
+    const n = await withTx(t, async tx => {
+        for (const r of todo) {
+            const p = await tx.party.create({ data: { ...r.data, tenantId: t, type } });
+            if (r.balance > 0) await postOpening(tx, t, p, r.balance);
+            else if (r.balance < 0) await ledger.post(tx, { tenantId: t, partyId: p.id, type: 'OPENING', refId: p.id, refNo: 'Opening balance', note: 'Opening balance (advance)',
+                ...(type === 'VENDOR' ? { debit: -r.balance } : { credit: -r.balance }), date: p.createdAt });
+        }
+        return todo.length;
+    }, { timeout: 180000 });
+    const total = todo.reduce((a, r) => a + r.balance, 0);
+    await audit(req, { action: 'parties.import', summary: `${n} ${label(type).toLowerCase()}(s) imported from a file, opening ${type === 'VENDOR' ? 'payable' : 'receivable'} ${rs(total)}${skipped ? `, ${skipped} already in HisabPro skipped` : ''}` });
+    res.json({ imported: n, skipped });
+});
+
 // ── list (POS search uses ?type=CUSTOMER&q=) ──
 router.get('/', READ, async (req, res) => {
     const type = typeOf(req.query.type) || undefined;

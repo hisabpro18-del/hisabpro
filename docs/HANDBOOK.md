@@ -9,7 +9,7 @@ use the table of contents.
 > [§2.3](#23-accounts-and-who-owns-them)) and keep them in a password manager. Never commit a secret; `.env` and `render.env` are
 > git-ignored for that reason.
 
-_Last updated: 2026-11-23 · Windows app 1.0.0 · Android app 1.0.2 · 195 automated tests passing_
+_Last updated: 2026-11-23 · Windows app 1.0.0 · Android app 1.0.2 · 216 automated tests passing_
 
 ---
 
@@ -280,7 +280,7 @@ exist: everything has to work on Postgres **and** SQLite, and on several offline
 │   ├── img/                   logo
 │   └── js/
 │       ├── shared/            used by server AND browser: calc.js (money/tax maths), permissions.js, plans.js, access.js,
-│       │                      escpos.js (thermal-printer encoder for the Android app)
+│       │                      escpos.js (thermal-printer encoder for the Android app), csvimport.js (spreadsheet import)
 │       ├── core/              html, icons, fmt, i18n (+ i18n-ur.js dictionary), api, ui (kit), router, shell (layout,
 │       │                      sidebar, top bar), app (start-up, login, activation), print, whatsapp, palette,
 │       │                      updates (Windows app updates), native (Android app helpers), theme-boot
@@ -512,9 +512,9 @@ All paths start with the mount. Auth = signed-in user unless noted; the permissi
 | `/api/auth` (auth.js) | `POST /login` · `GET /me` (session, shop, settings, permissions) · `POST /password` · `POST /logout` |
 | `/api/admin` (admin.js, **super admin, cloud only**) | `GET /stats` · `GET /storage` · `POST /maintenance` · `GET/POST /clients` · `GET/PUT /clients/:id` · `POST /clients/:id/access` · `GET/POST /clients/:id/users` · `PATCH /clients/:id/users/:uid` · `POST /clients/:id/users/:uid/reset-password` · `GET /clients/:id/devices` · `POST /clients/:id/devices/:did/revoke` · `POST /clients/:id/workspace` · `GET /audit` |
 | `/api/pos` (pos.js) | `GET /bootstrap` · `GET/POST /customers` · `GET /customers/:id/last-prices` · `POST /sales` (idempotent by `clientId`) · `GET /sales` · `GET /sales/lookup` · `GET /sales/:id` · `GET/POST /held` · `DELETE /held/:id` · `POST /returns` (idempotent) · `GET /returns` |
-| `/api/inventory` (inventory.js) | `GET/POST /master/:kind` · `PUT/DELETE /master/:kind/:id` (categories, brands, units, colors, sizes) · `GET/POST /products` · `GET/PUT/DELETE /products/:id` · `POST /products/:id/adjust` · `GET /products/:id/movements` · `POST /products/import` · `GET /catalog` · `GET /products/:id/serials` |
+| `/api/inventory` (inventory.js) | `GET/POST /master/:kind` · `PUT/DELETE /master/:kind/:id` (categories, brands, units, colors, sizes) · `GET/POST /products` · `GET/PUT/DELETE /products/:id` · `POST /products/:id/adjust` · `GET /products/:id/movements` · `POST /products/import` (rows from a spreadsheet; `skipExisting`) · `POST /master/:kind/import` (categories, brands) · `GET /catalog` · `GET /products/:id/serials` |
 | `/api/purchases` (purchases.js) | `GET /vendors` · `GET /` · `GET /returns` · `GET /:id` · `POST /` · `POST /:id/pay` · `POST /:id/returns` |
-| `/api/parties` (parties.js) | `GET /` · `GET /stats` · `GET /:id` · `POST /` · `PUT /:id` · `DELETE /:id` · `GET /:id/ledger` |
+| `/api/parties` (parties.js) | `GET /` · `GET /stats` · `GET /:id` · `POST /` · `PUT /:id` · `DELETE /:id` · `GET /:id/ledger` · `POST /import?type=CUSTOMER\|VENDOR` (from a spreadsheet; old balances become opening khata entries) |
 | `/api/khata` (khata.js) | `GET /summary` · `GET /customers/:id` · `POST /receive` · `GET/POST /promises` · `PATCH /promises/:id` · `POST /messages/log` · `POST /messages/sms` [parties.manage or finance.manage] · `GET /messages` · `GET/PUT /messaging` · `POST /messaging/test` · `POST /entries`, `DELETE /entries/:id` (amount-only `UDHAAR` / `BILL` khata entries, phone app) · `GET/POST /dues`, `PATCH /dues/:id` (vendor pay-by dates) |
 | `/api/day-close` (dayclose.js) | `GET /preview` · `POST /` · `GET /` |
 | `/api/finance` (finance.js) | accounts (`GET/POST /accounts`, `PUT/DELETE /accounts/:id`, `GET /ledger`, `GET /accounts/:id/ledger`, `POST /transfers`) · `GET /parties` · payments (`GET/POST /payments`, `DELETE /payments/:id`) · cheques (`GET/POST /cheques`, `POST /cheques/:id/clear`, `DELETE /cheques/:id`) · expenses (`GET/POST /expense-categories`, `DELETE /expense-categories/:id`, `GET/POST /expenses`, `DELETE /expenses/:id`) · capital (`GET /capital`, `POST /capital/setup`, `POST /capital`, `DELETE /capital/:id`) · taxes (`GET/POST /taxes`, `PUT/DELETE /taxes/:id`) |
@@ -619,6 +619,7 @@ Create one with `npm run db:migrate -- --name what_changed`; hand-written SQL (t
 | `whatsapp.js` | `HP.wa` click-to-send links (Urdu-safe formatting) |
 | `palette.js` | Ctrl+K quick search |
 | `updates.js` | Windows app updates (Settings → App update, notice to everyone at the PC) |
+| `importer.js` | The import dialog for products, categories, brands, customers, vendors: download template → upload CSV → match columns → preview → import. Column matching and the templates are in `shared/csvimport.js` (tested in `test/import.test.js`) |
 | `native.js` | Android app only: camera scanning, Bluetooth receipt printing (receipt → picture → ESC/POS), Android print, share sheet for files, Settings → Phone app ([docs/ANDROID.md](ANDROID.md)) |
 | `theme-boot.js` | Applies dark mode / palette before first paint |
 
