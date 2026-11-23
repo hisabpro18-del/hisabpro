@@ -108,7 +108,7 @@ printers and printers that do not understand `GS v 0` raster images (rare).
 ### 3.1 One-time: build tools on the build computer
 
 The project uses **Capacitor 8**, **Gradle 8.14.3**, **Android Gradle Plugin 8.13**, **Java 21**, **Android SDK 36**
-(minimum Android 7 / API 24).
+(minimum Android 8 / API 26 — the camera scanner needs it).
 
 Easiest: install **Android Studio** (it includes Java 21 and the SDK manager), open it once, and in *SDK Manager*
 install *Android 16 (API 36)* SDK Platform, *Build-Tools 36*, *Platform-Tools*.
@@ -220,7 +220,7 @@ Store → *Install anyway*. Then sign in with the user's usual HisabPro email an
 - [ ] WhatsApp thank-you / reminder opens WhatsApp; promise saved shows under Reminders.
 - [ ] Flight mode → offline page → *Try again* after reconnecting.
 - [ ] Settings → Phone app shows the version; after a newer `release.json`, the update notice and download appear.
-- [ ] Older Android (7–9) phone if available.
+- [ ] Older Android (8–9) phone if available (Android 7 and older cannot install it).
 
 ---
 
