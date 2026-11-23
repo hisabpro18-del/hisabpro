@@ -191,16 +191,26 @@ async function applyRows(rows) {
 // The cloud keeps its change log for two weeks only (to fit the database plan). A PC that was off longer — or a PC set
 // up after the log was cleaned — downloads a fresh copy of every table, then continues from the cloud's cursor at that
 // moment (changes made during the download are pulled again afterwards; applying a row twice does no harm).
+// tables whose old rows the cloud removes for good (services/maintenance.js): after a fresh copy, local rows the cloud no
+// longer has are removed too (else a PC away longer than the clean-up keeps e.g. a held cart resumed elsewhere)
+const CLEANED_IN_CLOUD = new Set(['HeldSale']);
 async function resync(resyncCursor, tables) {
     let applied = 0;
     for (const tbl of tables) {
         if (!PULLABLE.has(tbl)) continue;
         let after = '';
+        const seen = new Set();
         for (let page = 0; page < 100000; page++) {
             const r = await http('GET', `/api/sync/snapshot?tbl=${encodeURIComponent(tbl)}&after=${encodeURIComponent(after)}`, undefined, 120000);
+            for (const row of r.rows) seen.add(row.id);
             applied += await applyRows(r.rows.map(row => ({ tbl, row })));
             if (!r.more || !r.next) break;
             after = r.next;
+        }
+        if (CLEANED_IN_CLOUD.has(tbl)) {
+            const waiting = new Set((await prisma.$queryRawUnsafe('SELECT "rowId" FROM "_outbox" WHERE "tbl" = ?', tbl)).map(x => x.rowId));
+            const gone = (await prisma[delegate(tbl)].findMany({ select: { id: true } })).map(x => x.id).filter(id => !seen.has(id) && !waiting.has(id));
+            if (gone.length) await prisma[delegate(tbl)].deleteMany({ where: { id: { in: gone } } });
         }
     }
     const at = new Date().toISOString();

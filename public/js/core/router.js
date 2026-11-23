@@ -19,7 +19,8 @@
     let cleanup = null, seq = 0;
     function navigate(path, { replace } = {}) {
         if (path === location.pathname + location.search && !replace) return render();
-        history[replace ? 'replaceState' : 'pushState']({ prev: current }, '', path); // prev: the phone app's back arrow
+        // prev (the phone app's back arrow) only on a new entry; a replace keeps the entry's own state
+        if (replace) history.replaceState(history.state, '', path); else history.pushState({ prev: current }, '', path);
         render();
     }
     async function render() {
@@ -62,15 +63,15 @@
         }
     }
     // the address the user is on (kept up to date when pages change it themselves with history.replaceState)
-    let current = location.pathname + location.search;
+    let current = location.pathname + location.search, currentState = history.state;
     for (const fn of ['pushState', 'replaceState']) {
         const orig = history[fn].bind(history);
-        history[fn] = (...a) => { const r = orig(...a); current = location.pathname + location.search; return r; };
+        history[fn] = (...a) => { const r = orig(...a); current = location.pathname + location.search; currentState = a[0]; return r; };
     }
     window.addEventListener('popstate', () => {
         // back with a dialog open closes the dialog and stays on the page (Android back button, browser back)
-        if (HP.ui.backPressed && HP.ui.backPressed()) { history.pushState({}, '', current); return; }
-        current = location.pathname + location.search;
+        if (HP.ui.backPressed && HP.ui.backPressed()) { history.pushState(currentState, '', current); return; }
+        current = location.pathname + location.search; currentState = history.state;
         render();
     });
     document.addEventListener('click', e => {

@@ -6,7 +6,7 @@ const has = k => Perms.has(HP.session, k);
 const GROUPS = [['RETAIL', 'Retail'], ['WHOLESALE', 'Wholesale'], ['VIP', 'VIP']];
 const TERMS = [['COD', 'Cash on Delivery'], ['DUE_ON_RECEIPT', 'Due on Receipt'], ['NET_15', 'Net 15'], ['NET_30', 'Net 30'], ['NET_45', 'Net 45'], ['NET_60', 'Net 60'], ['PREPAID', 'Prepaid']];
 const label = (list, v) => (list.find(x => x[0] === v) || [v, v])[1];
-const ENTRY = { OPENING: 'Opening balance', SALE: 'Sale', SALE_RETURN: 'Sale return', PURCHASE: 'Purchase', PURCHASE_RETURN: 'Purchase return (debit note)', PAYMENT_IN: 'Payment received', PAYMENT_OUT: 'Payment made', CHEQUE: 'Cheque cleared', ADJUSTMENT: 'Adjustment' };
+const ENTRY = { OPENING: 'Opening balance', SALE: 'Sale', SALE_RETURN: 'Sale return', PURCHASE: 'Purchase', PURCHASE_RETURN: 'Purchase return (debit note)', PAYMENT_IN: 'Payment received', PAYMENT_OUT: 'Payment made', CHEQUE: 'Cheque cleared', ADJUSTMENT: 'Adjustment', UDHAAR: 'Udhaar given (phone)', BILL: 'Goods received (phone)' };
 const searchIcon = () => html`<span class="pointer-events-none absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span>`;
 
 const CFG = {

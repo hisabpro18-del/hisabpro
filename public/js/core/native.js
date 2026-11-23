@@ -176,6 +176,9 @@
                 <div class="mt-1 text-sm text-muted">${p ? html`${p.name} · ${paper()} mm` : t('No printer chosen yet. Receipts open Android printing until you choose one.')}</div>
                 <div class="mt-4 flex flex-wrap gap-2"><button class="btn btn-primary" data-np="choose">${icon('printer')}${p ? t('Change printer') : t('Choose printer')}</button>
                   ${p ? html`<button class="btn btn-outline" data-np="test">${t('Test print')}</button><button class="btn btn-ghost" data-np="forget">${t('Forget printer')}</button>` : ''}</div></div>
+              <div class="mt-4 rounded-xl border border-line p-5" data-alerts><div class="font-semibold">${t('Payment alerts')}</div>
+                <div class="mt-1 text-sm text-muted">${t('A notification with sound on the day a vendor must be paid.')}</div>
+                <button type="button" class="btn btn-outline mt-3" data-np="alerts">${icon('bell')}${t('Check alerts')}</button></div>
               <div class="mt-4 rounded-xl border border-line p-5">
                 <div class="flex flex-wrap items-center justify-between gap-3"><div><div class="text-xs text-muted">${t('Installed version')}</div><div class="text-xl font-bold">${v ? v.installed || '—' : '…'}</div></div>
                   ${v ? (v.newer ? ui.badge(t('Update available'), 'warn') : ui.badge(t('Up to date'), 'good')) : ''}</div>
@@ -192,7 +195,85 @@
             else if (act === 'test') testPrint();
             else if (act === 'forget') { store.set(KEY_PRINTER, null); draw(v); }
             else if (act === 'download' && v && v.url) openExternal(v.url);
+            else if (act === 'alerts') {
+                try { const n = await refreshAlarms(true, true); ui.toast(`${t('Payment alerts are on')}${n ? ` · ${n} ${t('set')}` : ''}`); }
+                catch (err) { ui.fail(err); }
+            }
         });
+    }
+
+    // ── payment alarms: on a vendor's pay-by day the phone shows a notification with sound at 10:00, even when the app
+    // is closed (Capacitor LocalNotifications; scheduled on the phone from the open dues, cancelled when paid) ──
+    // Remembered per due: { id, at } of the alarm set for it. An alarm that has rung (or is about to) is never set again,
+    // never cancelled and never cleared from the tray; only alarms of dues that are no longer open are cancelled.
+    const KEY_ALARMS = 'hp.alarms';
+    const alarmId = s => { let h = 7; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) | 0; return (Math.abs(h) % 2000000000) + 1; };
+    async function alarmsAllowed(ask) {
+        const p = await call('LocalNotifications', 'checkPermissions');
+        if (p.display === 'granted') return true;
+        if (!ask || p.display === 'denied') return false;
+        return (await call('LocalNotifications', 'requestPermissions')).display === 'granted';
+    }
+    // rows: open dues; complete: false when the server cut the list (then nothing is cancelled); ask: may show the
+    // Android permission prompt (only after something the owner did); strict: errors are thrown, not just logged
+    async function syncAlarms(rows, { complete = true, ask = false, strict = false } = {}) {
+        if (!isApp() || !Array.isArray(rows)) return 0;
+        try {
+            if (!(await alarmsAllowed(ask))) { if (strict) throw new Error(t('Alerts are off. Allow notifications for HisabPro in Android Settings → Apps → HisabPro.')); return 0; }
+            const now = Date.now(), todayYmd = HP.fmt.ymd(new Date());
+            const prev = store.get(KEY_ALARMS, {});
+            const next = {}, schedule = [];
+            const note = (d, at) => ({ id: alarmId(d.id), title: `${t('Payment due')}: ${d.name}`, body: `${t('Pay')} ${HP.fmt.money(d.amount)} · ${d.dueDate === todayYmd ? t('today') : HP.fmt.date(d.dueDate)} · ادائیگی`,
+                schedule: { at: new Date(at).toISOString(), allowWhileIdle: true }, isExactNotification: false, extra: { path: '/m/reminders?view=vendors' } });
+            for (const d of rows) {
+                if (!['PENDING', 'OVERDUE'].includes(d.status)) continue;
+                const [y, m, dd] = d.dueDate.split('-').map(Number);
+                const target = new Date(y, m - 1, dd, 10, 0, 0).getTime(); // 10:00 on the phone's clock
+                const had = prev[d.id];
+                if (target > now) {
+                    next[d.id] = { id: alarmId(d.id), at: target };
+                    if (!had || had.at !== target) schedule.push(note(d, target)); // new, or the date was moved
+                } else if (had && (had.at <= now || new Date(had.at).toDateString() === new Date(now).toDateString())) {
+                    next[d.id] = had; // it has rung, or today's catch-up rings in a moment: leave it alone
+                } else if (d.dueDate === todayYmd) { // set or moved to today after 10:00 (an alarm for a later day is replaced)
+                    const at = now + 60000; // due today, set after 10:00: once, in a minute
+                    next[d.id] = { id: alarmId(d.id), at };
+                    schedule.push(note(d, at));
+                } // late dues that never had an alarm: no sound — they are on the Reminders screen
+            }
+            // alarms of dues that are no longer open (paid, removed, cancelled, or a late due whose alarm was for a later
+            // day) — only when the list is complete, else a due left out of it would lose its alarm
+            const drop = complete ? Object.keys(prev).filter(k => !next[k]).map(k => prev[k].id) : [];
+            if (!complete) for (const k of Object.keys(prev)) if (!next[k]) next[k] = prev[k];
+            if (drop.length) await call('LocalNotifications', 'cancel', { notifications: drop.map(id => ({ id })) });
+            if (schedule.length) await call('LocalNotifications', 'schedule', { notifications: schedule });
+            store.set(KEY_ALARMS, next);
+            return Object.keys(next).length;
+        } catch (e) { if (strict) throw e; console.warn('payment alarms:', e.message); return 0; }
+    }
+    // fetch the open dues and schedule their alarms (at most once a minute, unless something was just changed)
+    let lastAlarmSync = 0;
+    // force: something was just changed by the owner (may ask for permission); strict: errors reach the caller
+    async function refreshAlarms(force, strict) {
+        if (!isApp() || (!force && Date.now() - lastAlarmSync < 60000)) return 0;
+        lastAlarmSync = Date.now();
+        try {
+            const r = await HP.api.get('/api/khata/dues', { view: 'pending' });
+            return await syncAlarms(r.rows, { complete: r.complete !== false, ask: !!force, strict });
+        } catch (e) { if (strict) throw e; return 0; }
+    }
+    // tapping a payment alert opens the vendors to pay (Capacitor keeps the event until a listener is added)
+    let pendingPath = null;
+    function listenForAlertTaps() {
+        call('LocalNotifications', 'checkPermissions').then(() => {
+            window.Capacitor.nativeCallback('LocalNotifications', 'addListener', { eventName: 'localNotificationActionPerformed' }, ev => {
+                const path = ev && ev.notification && ev.notification.extra && ev.notification.extra.path;
+                if (!path || !/^\/m(\/|$)/.test(path)) return;
+                pendingPath = path;
+                const tryGo = (n = 0) => { if (HP.session && HP.router) { HP.router.navigate(pendingPath); pendingPath = null; } else if (n < 50) setTimeout(() => tryGo(n + 1), 200); };
+                tryGo();
+            });
+        }).catch(() => {});
     }
 
     // one notice per new APK version
@@ -209,6 +290,7 @@
     function init() {
         if (!isApp()) return;
         document.documentElement.classList.add('hp-app');
+        listenForAlertTaps();
         setTimeout(checkForUpdate, 15000);
     }
 
@@ -217,6 +299,6 @@
     const forced = () => { try { return localStorage.getItem('hp.mobileMode') === '1'; } catch { return false; } };
     HP.mobile = { on: () => isApp() || forced() };
 
-    HP.native = { isApp, scan, choosePrinter, testPrint, print, systemPrint, shareBlob, versions, settingsCard, printer, paper };
+    HP.native = { isApp, scan, choosePrinter, testPrint, print, systemPrint, shareBlob, versions, settingsCard, printer, paper, syncAlarms, refreshAlarms };
     document.addEventListener('DOMContentLoaded', init);
 })();

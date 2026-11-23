@@ -51,6 +51,43 @@ async function settlePromises(tenantId, partyId, db = prisma) {
 
 // money in from a customer at the counter or the khata page: a Payment (REC-, same counter as Finance → Payments In),
 // a khata credit and the cash/bank account entry, in the caller's transaction
+// ── vendor dues (what the shop must pay a vendor by a date) ──
+// payments to the vendor recorded after `since`. A payment made at the counter together with a purchase (the same
+// moment) belongs to that purchase; paying a purchase later (Purchases → Pay) does count.
+async function vendorPaidSince(tenantId, partyId, since, db = prisma) {
+    const rows = await db.ledgerEntry.findMany({ where: { tenantId, partyId, deletedAt: null, type: { in: ['PAYMENT_OUT', 'CHEQUE'] }, debit: { gt: 0 }, createdAt: { gte: since } }, select: { debit: true, refId: true, createdAt: true } });
+    const refs = [...new Set(rows.map(r => r.refId).filter(Boolean))];
+    const purchases = refs.length ? await db.ledgerEntry.findMany({ where: { tenantId, partyId, deletedAt: null, type: 'PURCHASE', refId: { in: refs } }, select: { refId: true, createdAt: true } }) : [];
+    const madeAt = new Map(purchases.map(p => [p.refId, p.createdAt.getTime()]));
+    const withPurchase = r => madeAt.has(r.refId) && Math.abs(r.createdAt.getTime() - madeAt.get(r.refId)) <= 10000;
+    return rows.filter(r => !withPurchase(r)).reduce((s, r) => s + N(r.debit), 0);
+}
+// Dues are paid off oldest first by the payments made after the first of them. The walk runs over every due that is
+// not cancelled (PAID ones included), so a payment that already paid one due is never counted again for the next.
+// A vendor who is owed nothing has nothing due.
+async function settleDues(tenantId, partyId, db = prisma) {
+    const dues = await db.vendorDue.findMany({ where: { tenantId, partyId, deletedAt: null, status: { in: ['PENDING', 'PAID'] } }, orderBy: [{ createdAt: 'asc' }] });
+    if (!dues.some(d => d.status === 'PENDING')) return 0;
+    const balance = await ledger.balance(tenantId, partyId, true, db);
+    let paid = await vendorPaidSince(tenantId, partyId, dues[0].createdAt, db);
+    let n = 0;
+    for (const d of dues) {
+        const amount = N(d.amount);
+        const covered = paid >= amount;
+        paid = Math.max(0, paid - amount);
+        if (d.status === 'PENDING' && (covered || balance <= 0)) {
+            await db.vendorDue.update({ where: { id: d.id }, data: { status: 'PAID', paidAt: new Date() } });
+            n++;
+        }
+    }
+    return n;
+}
+// settle every vendor that has open dues (before listing or counting them)
+async function settleAllDues(tenantId, db = prisma) {
+    const open = await db.vendorDue.findMany({ where: { tenantId, status: 'PENDING', deletedAt: null }, select: { partyId: true } });
+    for (const pid of [...new Set(open.map(d => d.partyId))]) await settleDues(tenantId, pid, db);
+}
+
 async function receive(tx, { tenantId, party, amount, method = 'CASH', accountId = null, note = '', userId = null, date = new Date() }) {
     const acc = await treasury.accountFor(tx, tenantId, method, accountId);
     const number = await numbering.number(tx, tenantId, 'paymentIn', 'REC-');
@@ -63,4 +100,4 @@ async function receive(tx, { tenantId, party, amount, method = 'CASH', accountId
 const today = (tz = 'Asia/Karachi') => dates.ymd(new Date(), tz);
 const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
 
-module.exports = { ltr, rs, numericDate, promiseValues, paidSince, settlePromises, receive, today, daysBetween };
+module.exports = { ltr, rs, numericDate, promiseValues, paidSince, settlePromises, vendorPaidSince, settleDues, settleAllDues, receive, today, daysBetween };

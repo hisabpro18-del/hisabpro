@@ -78,6 +78,7 @@ test('clean-up: old housekeeping rows go, shop records stay; caps; storage card'
         assert.equal(st.data.limitBytes, 500 * 1024 * 1024);
         assert.ok(['ok', 'warning', 'danger'].includes(st.data.level));
         assert.ok(st.data.tables.length > 0 && st.data.tables[0].name);
+        assert.equal((await call('GET', '/api/admin/audit?from=2026-13-40', undefined, h.adminToken)).status, 400, 'a malformed date is a clear 400');
         const run = await call('POST', '/api/admin/maintenance', {}, h.adminToken);
         assert.equal(run.status, 200, JSON.stringify(run.data));
         assert.deepEqual(run.data.errors, []);
@@ -123,6 +124,9 @@ test('sync log clean-up: a PC set up after it, and a PC that was away longer, do
     });
 
     await t.test('a PC away for longer than the sync log is kept resyncs, gets what changed, and its own sales still go up', async () => {
+        // a held cart the PC knows about, which is resumed on the web while the PC is away (and later cleaned away)
+        const held = (await h.post('/api/pos/held', { label: 'Table 4', total: 5000, cart: { lines: [] } })).data;
+        await waitFor(async () => ((await pcCall(port, 'GET', '/api/pos/held', null, token)).data || []).some(x => x.id === held.id));
         const dead = `http://127.0.0.1:${await freePort()}`;
         await pcCall(port, 'POST', '/api/desktop/server', { serverUrl: dead }, token);
         // wait for a sync that failed against the dead address (one already running could still finish against the cloud)
@@ -132,6 +136,8 @@ test('sync log clean-up: a PC set up after it, and a PC that was away longer, do
         // meanwhile in the cloud: a new price and a new product, then (as if 15 days passed) the clean-up
         await h.put(`/api/inventory/products/${rice}`, { name: 'Rice 5kg', retailPrice: 160000, cost: 120000 });
         const oil = (await h.post('/api/inventory/products', { name: 'Oil 1L', retailPrice: 55000, cost: 45000, openingStock: 12 })).data.id;
+        assert.equal((await h.del('/api/pos/held/' + held.id)).status, 200);
+        assert.ok(await maintenance.pruneHeld(new Date(Date.now() + 40 * DAY)) >= 1, 'the removed cart is cleaned away in the cloud');
         const removed = await maintenance.pruneChangeLog(new Date(Date.now() + 15 * DAY), { tenantId: h.tenantId });
         assert.ok(removed > 0);
         const firstResync = (await pcCall(port, 'GET', '/api/desktop/status')).data.lastResyncAt;
@@ -148,5 +154,6 @@ test('sync log clean-up: a PC set up after it, and a PC that was away longer, do
         assert.equal(cloud.stock, 38, 'the PC\'s offline sale reached the cloud');
         const pcRice = (await pcCall(port, 'GET', '/api/inventory/catalog', null, token)).data.find(x => x.id === rice);
         assert.equal(pcRice.stock, 38);
+        assert.ok(!((await pcCall(port, 'GET', '/api/pos/held', null, token)).data || []).some(x => x.id === held.id), 'the PC no longer offers the resumed cart');
     });
 });

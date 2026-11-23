@@ -245,6 +245,8 @@ router.get('/audit', async (req, res) => {
     if (req.query.tenantId) where.tenantId = String(req.query.tenantId);
     const q = str(req.query.q, 100);
     if (q) where.OR = [{ summary: ci(q) }, { userEmail: ci(q) }, { action: ci(q) }];
+    const realDay = v => { const d = new Date(String(v) + 'T00:00:00Z'); return /^\d{4}-\d{2}-\d{2}$/.test(String(v)) && !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === String(v); };
+    for (const k of ['from', 'to']) if (req.query[k] && !realDay(req.query[k])) throw new HttpError(400, 'Choose a valid date.');
     if (req.query.from || req.query.to) where.createdAt = { ...(req.query.from ? { gte: new Date(req.query.from + 'T00:00:00+05:00') } : {}), ...(req.query.to ? { lt: new Date(new Date(req.query.to + 'T00:00:00+05:00').getTime() + 86400000) } : {}) };
     const rows = await prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, take: Math.min(Number(req.query.limit) || 300, 5000) });
     const names = Object.fromEntries((await prisma.tenant.findMany({ select: { id: true, name: true } })).map(t => [t.id, t.name]));

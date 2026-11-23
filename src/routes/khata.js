@@ -20,10 +20,30 @@ const MANAGE = can('parties.manage', 'finance.manage', 'sales.create');
 const RECEIVE = can('sales.create', 'parties.manage', 'finance.manage');
 const tzOf = async t => (await settings.get(t, 'localization')).timezone || 'Asia/Karachi';
 
+async function vendor(t, id) {
+    const p = await prisma.party.findFirst({ where: { id: String(id || ''), tenantId: t, type: 'VENDOR', deletedAt: null } });
+    if (!p) throw new HttpError(404, 'Vendor not found.');
+    return p;
+}
+const numbering = require('../services/numbering');
+const Perms = require('../../public/js/shared/permissions');
+const LEDGER = can('parties.manage', 'finance.manage');
+
 async function customer(t, id) {
     const p = await prisma.party.findFirst({ where: { id: String(id || ''), tenantId: t, type: 'CUSTOMER', deletedAt: null } });
     if (!p) throw new HttpError(404, 'Customer not found.');
     return p;
+}
+
+// vendors to pay: due today / late / within 7 days (and how much) — after settling, so paid dues do not count
+async function dueCounts(t, today) {
+    await K.settleAllDues(t);
+    const dues = await prisma.vendorDue.findMany({ where: { tenantId: t, status: 'PENDING', deletedAt: null }, select: { dueDate: true, amount: true } });
+    const week = dates.addDays(today, 7);
+    return {
+        vendorDueToday: dues.filter(d => d.dueDate === today).length, vendorOverdue: dues.filter(d => d.dueDate < today).length,
+        vendorDueWeek: dues.filter(d => d.dueDate <= week).reduce((s, d) => s + N(d.amount), 0), vendorDuePending: dues.length,
+    };
 }
 
 // ── khata book ──
@@ -57,6 +77,8 @@ router.get('/summary', VIEW, async (req, res) => {
             dueToday: promises.filter(p => p.promisedDate === today).length, overdue: promises.filter(p => p.promisedDate < today).length,
             collectedToday: N(collected._sum.credit), messagesToday: sentToday,
             overLimit: owing.filter(r => r.creditLimit > 0 && r.balance > r.creditLimit).length,
+            // what the shop owes vendors is for those who manage the khata or money, not for cashiers
+            ...(['parties.manage', 'finance.manage'].some(k => Perms.has(req.user, k)) ? await dueCounts(t, today) : {}),
         },
         rows,
     });
@@ -279,6 +301,124 @@ router.post('/messaging/test', can('settings.manage'), async (req, res) => {
     const r = await sms.send(t, to, body);
     await prisma.messageLog.create({ data: { tenantId: t, channel: 'SMS', kind: 'CUSTOM', to, body, status: r.status, provider: r.provider, error: r.error, userId: req.user.id } });
     res.json(r);
+});
+
+// ── amount-only khata entries (the phone app): "udhaar given" to a customer, "goods received" from a vendor ──
+// They change the khata only — no stock, no cash, no sale or purchase document. Goods that are also entered as a
+// purchase on the shop computer must not be entered here as well (the vendor balance would count them twice).
+const ENTRY_KINDS = { UDHAAR: { type: 'CUSTOMER', prefix: 'UDH-', key: 'udhaar', label: 'Udhaar given' }, BILL: { type: 'VENDOR', prefix: 'BIL-', key: 'bill', label: 'Goods received' } };
+router.post('/entries', LEDGER, async (req, res) => {
+    const t = req.user.tenantId;
+    const b = req.body || {};
+    const kind = oneOf(String(b.kind || '').toUpperCase() || undefined, Object.keys(ENTRY_KINDS), 'Entry type');
+    const def = ENTRY_KINDS[kind];
+    const party = def.type === 'CUSTOMER' ? await customer(t, b.partyId) : await vendor(t, b.partyId);
+    const amount = paisa(b.amount, 'Amount');
+    if (!amount) throw new HttpError(400, 'Enter the amount.');
+    const tz = await tzOf(t);
+    const today = K.today(tz);
+    const day = b.date ? String(b.date) : today;
+    if (!dates.isDay(day)) throw new HttpError(400, 'Choose a valid date.');
+    if (day > today) throw new HttpError(400, 'The date cannot be in the future.');
+    const when = day === today ? new Date() : dates.range('custom', { from: day, to: day, tz }).from;
+    const due = b.dueDate ? String(b.dueDate) : '';
+    if (due && (!dates.isDay(due) || due < today)) throw new HttpError(400, kind === 'BILL' ? 'Choose a payment date from today on.' : 'Choose a promise date from today on.');
+    const note = str(b.note, 200);
+    const out = await withTx(t, async tx => {
+        const number = await numbering.number(tx, t, def.key, def.prefix);
+        const e = await ledger.post(tx, { tenantId: t, partyId: party.id, type: kind, ...(kind === 'UDHAAR' ? { debit: amount } : { credit: amount }), refNo: number, note: note || def.label, date: when });
+        let dueId = null;
+        if (due && kind === 'BILL') dueId = (await tx.vendorDue.create({ data: { tenantId: t, partyId: party.id, amount: BigInt(amount), dueDate: due, note: note || number, refId: e.id, createdById: req.user.id } })).id;
+        if (due && kind === 'UDHAAR') dueId = (await tx.paymentPromise.create({ data: { tenantId: t, partyId: party.id, amount: BigInt(amount), promisedDate: due, note: note || number, refId: e.id, createdById: req.user.id } })).id;
+        return { id: e.id, number, dueId };
+    });
+    const balance = await ledger.balance(t, party.id, kind === 'BILL');
+    await audit(req, { action: kind === 'UDHAAR' ? 'khata.udhaar' : 'khata.bill', summary: `${def.label} ${out.number}: ${K.rs(amount)} ${kind === 'UDHAAR' ? 'to' : 'from'} "${party.name}"${due ? `, ${kind === 'BILL' ? 'to pay' : 'promised'} by ${due}` : ''}; balance ${K.rs(balance)}` });
+    res.json({ ...out, amount, balance, date: when });
+});
+
+// remove an amount-only entry made by mistake (other khata entries belong to documents and are corrected there)
+router.delete('/entries/:id', LEDGER, async (req, res) => {
+    const t = req.user.tenantId;
+    const e = await prisma.ledgerEntry.findFirst({ where: { id: req.params.id, tenantId: t, deletedAt: null } });
+    if (!e) throw new HttpError(404, 'Entry not found.');
+    if (!ENTRY_KINDS[e.type]) throw new HttpError(400, 'Only "udhaar given" and "goods received" entries can be removed here. Correct the sale, purchase or payment instead.');
+    const now = new Date();
+    await withTx(t, async tx => {
+        await tx.ledgerEntry.update({ where: { id: e.id }, data: { deletedAt: now } });
+        // its pay-by date / promise goes with it (no reminders for money that was never owed)
+        await tx.vendorDue.updateMany({ where: { tenantId: t, refId: e.id, deletedAt: null, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+        await tx.paymentPromise.updateMany({ where: { tenantId: t, refId: e.id, deletedAt: null, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+    });
+    const party = await prisma.party.findFirst({ where: { id: e.partyId } });
+    await audit(req, { action: 'khata.entry_delete', summary: `${ENTRY_KINDS[e.type].label} ${e.refNo} (${K.rs(N(e.debit) || N(e.credit))}) removed from "${party ? party.name : ''}"` });
+    res.json({ ok: true, balance: party ? await ledger.balance(t, party.id, party.type === 'VENDOR') : 0 });
+});
+
+// ── vendor dues: what to pay whom, by when ──
+const dueView = (d, party, balance, today) => ({
+    id: d.id, partyId: d.partyId, name: party ? party.name : '', phone: party ? party.phone : '', amount: N(d.amount), dueDate: d.dueDate, note: d.note,
+    status: d.status === 'PENDING' && d.dueDate < today ? 'OVERDUE' : d.status, daysLeft: K.daysBetween(today, d.dueDate), balance, refId: d.refId, paidAt: d.paidAt, createdAt: d.createdAt,
+});
+router.get('/dues', LEDGER, async (req, res) => {
+    const t = req.user.tenantId;
+    const today = K.today(await tzOf(t));
+    const view = oneOf(req.query.view || 'pending', ['pending', 'today', 'overdue', 'upcoming', 'paid', 'all'], 'View');
+    const where = { tenantId: t, deletedAt: null };
+    if (req.query.partyId) where.partyId = String(req.query.partyId);
+    // settle first: payments recorded anywhere (web, PC, phone) clear the dues they cover
+    await K.settleAllDues(t);
+    if (view === 'paid') where.status = 'PAID';
+    else if (view !== 'all') {
+        where.status = 'PENDING';
+        if (view === 'today') where.dueDate = today;
+        else if (view === 'overdue') where.dueDate = { lt: today };
+        else if (view === 'upcoming') where.dueDate = { gt: today };
+    }
+    const take = view === 'pending' ? 10000 : 500; // the phone schedules alarms from the whole pending list
+    const list = await prisma.vendorDue.findMany({ where, orderBy: [{ dueDate: view === 'paid' ? 'desc' : 'asc' }, { createdAt: 'asc' }], take });
+    const parties = Object.fromEntries((await prisma.party.findMany({ where: { tenantId: t, id: { in: [...new Set(list.map(d => d.partyId))] } } })).map(p => [p.id, p]));
+    const bal = Object.keys(parties).length ? await ledger.balances(t, { partyIds: Object.keys(parties), type: 'VENDOR' }) : {};
+    res.json({ today, rows: list.map(d => dueView(d, parties[d.partyId], bal[d.partyId] || 0, today)), complete: list.length < take, counts: await dueCounts(t, today) });
+});
+router.post('/dues', LEDGER, async (req, res) => {
+    const t = req.user.tenantId;
+    const b = req.body || {};
+    const party = await vendor(t, b.partyId);
+    const amount = paisa(b.amount, 'Amount');
+    if (!amount) throw new HttpError(400, 'Enter the amount to pay.');
+    const today = K.today(await tzOf(t));
+    const day = need(b.dueDate, 'Payment date', 10);
+    if (!dates.isDay(day) || day < today) throw new HttpError(400, 'Choose a payment date from today on.');
+    // nothing is owed: there is nothing to pay (record the goods received first; a due would be paid off at once)
+    if (await ledger.balance(t, party.id, true) <= 0) throw new HttpError(400, 'You owe this vendor nothing. Record the goods received first.');
+    const d = await prisma.vendorDue.create({ data: { tenantId: t, partyId: party.id, amount: BigInt(amount), dueDate: day, note: str(b.note, 200), createdById: req.user.id } });
+    await audit(req, { action: 'khata.vendor_due', summary: `Pay "${party.name}" ${K.rs(amount)} by ${day}` });
+    res.json({ id: d.id });
+});
+router.patch('/dues/:id', LEDGER, async (req, res) => {
+    const t = req.user.tenantId;
+    const d = await prisma.vendorDue.findFirst({ where: { id: req.params.id, tenantId: t, deletedAt: null } });
+    if (!d) throw new HttpError(404, 'Payment reminder not found.');
+    const b = req.body || {};
+    const data = {};
+    if (b.status !== undefined) {
+        // PAID is never set by hand: payments clear dues by themselves (a hand-marked due would make a later payment
+        // count twice). A reminder that is not needed any more is cancelled.
+        data.status = oneOf(String(b.status).toUpperCase(), ['PENDING', 'CANCELLED'], 'Status');
+        data.paidAt = null;
+    }
+    if (b.dueDate !== undefined) {
+        const today = K.today(await tzOf(t));
+        if (!dates.isDay(String(b.dueDate)) || String(b.dueDate) < today) throw new HttpError(400, 'Choose a payment date from today on.');
+        data.dueDate = String(b.dueDate); data.status = 'PENDING'; data.paidAt = null;
+    }
+    if (b.amount !== undefined) { const a = paisa(b.amount, 'Amount'); if (!a) throw new HttpError(400, 'Enter the amount.'); data.amount = BigInt(a); }
+    if (b.note !== undefined) data.note = str(b.note, 200);
+    await prisma.vendorDue.update({ where: { id: d.id }, data });
+    const party = await prisma.party.findFirst({ where: { id: d.partyId } });
+    await audit(req, { action: 'khata.vendor_due_update', summary: `Payment reminder for "${party ? party.name : ''}" (${K.rs(N(d.amount))}, ${d.dueDate}) ${data.status ? data.status.toLowerCase() : 'changed'}${data.dueDate ? ` → ${data.dueDate}` : ''}` });
+    res.json({ ok: true });
 });
 
 module.exports = { router, mount: '/api/khata', queueOrSend };

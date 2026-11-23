@@ -315,7 +315,11 @@
         root.innerHTML = String(safeHtml);
         // let barcodes / images render before printing
         const silent = window.hpDesktop && HP.session && HP.session.settings && HP.session.settings.receipt && HP.session.settings.receipt.autoPrint;
-        setTimeout(() => { if (HP.ui.afterPrintRender) HP.ui.afterPrintRender(root); setTimeout(() => (HP.native && HP.native.isApp() ? HP.native.print(root) : silent ? window.hpDesktop.printSilent() : window.print()), 150); }, 50);
+        setTimeout(() => { if (HP.ui.afterPrintRender) HP.ui.afterPrintRender(root); setTimeout(() => (HP.native && HP.native.isApp() ? HP.native.print(root) : silent ? silentPrint() : window.print()), 150); }, 50);
+        // Auto-Print on Save (Windows app): if the printer refuses, say so and open the normal print dialog
+        function silentPrint() {
+            Promise.resolve(window.hpDesktop.printSilent()).then(r => { if (r && r.ok === false) { toast(`Could not print automatically${r.reason ? ': ' + r.reason : ''}. Choose a printer.`, 'error'); window.print(); } }).catch(() => window.print());
+        }
     }
 
     // file → data: URL, shrunk to maxPx on the longer side; JPEG quality steps down until it fits in maxBytes.

@@ -9,7 +9,7 @@ use the table of contents.
 > [§2.3](#23-accounts-and-who-owns-them)) and keep them in a password manager. Never commit a secret; `.env` and `render.env` are
 > git-ignored for that reason.
 
-_Last updated: 2026-11-23 · Windows app 1.0.0 · Android app prepared (not built) · 183 automated tests passing_
+_Last updated: 2026-11-23 · Windows app 1.0.0 · Android app 1.0.2 · 195 automated tests passing_
 
 ---
 
@@ -515,7 +515,7 @@ All paths start with the mount. Auth = signed-in user unless noted; the permissi
 | `/api/inventory` (inventory.js) | `GET/POST /master/:kind` · `PUT/DELETE /master/:kind/:id` (categories, brands, units, colors, sizes) · `GET/POST /products` · `GET/PUT/DELETE /products/:id` · `POST /products/:id/adjust` · `GET /products/:id/movements` · `POST /products/import` · `GET /catalog` · `GET /products/:id/serials` |
 | `/api/purchases` (purchases.js) | `GET /vendors` · `GET /` · `GET /returns` · `GET /:id` · `POST /` · `POST /:id/pay` · `POST /:id/returns` |
 | `/api/parties` (parties.js) | `GET /` · `GET /stats` · `GET /:id` · `POST /` · `PUT /:id` · `DELETE /:id` · `GET /:id/ledger` |
-| `/api/khata` (khata.js) | `GET /summary` · `GET /customers/:id` · `POST /receive` · `GET/POST /promises` · `PATCH /promises/:id` · `POST /messages/log` · `POST /messages/sms` [parties.manage or finance.manage] · `GET /messages` · `GET/PUT /messaging` · `POST /messaging/test` |
+| `/api/khata` (khata.js) | `GET /summary` · `GET /customers/:id` · `POST /receive` · `GET/POST /promises` · `PATCH /promises/:id` · `POST /messages/log` · `POST /messages/sms` [parties.manage or finance.manage] · `GET /messages` · `GET/PUT /messaging` · `POST /messaging/test` · `POST /entries`, `DELETE /entries/:id` (amount-only `UDHAAR` / `BILL` khata entries, phone app) · `GET/POST /dues`, `PATCH /dues/:id` (vendor pay-by dates) |
 | `/api/day-close` (dayclose.js) | `GET /preview` · `POST /` · `GET /` |
 | `/api/finance` (finance.js) | accounts (`GET/POST /accounts`, `PUT/DELETE /accounts/:id`, `GET /ledger`, `GET /accounts/:id/ledger`, `POST /transfers`) · `GET /parties` · payments (`GET/POST /payments`, `DELETE /payments/:id`) · cheques (`GET/POST /cheques`, `POST /cheques/:id/clear`, `DELETE /cheques/:id`) · expenses (`GET/POST /expense-categories`, `DELETE /expense-categories/:id`, `GET/POST /expenses`, `DELETE /expenses/:id`) · capital (`GET /capital`, `POST /capital/setup`, `POST /capital`, `DELETE /capital/:id`) · taxes (`GET/POST /taxes`, `PUT/DELETE /taxes/:id`) |
 | `/api/hrm` (hrm.js) | `GET /meta` · employees (`GET /employees`, `GET /employees/next-code`, `GET/PUT/DELETE /employees/:id`, `POST /employees`, `PUT /employees/:id/documents/:kind`) · shifts · attendance (+ `POST /attendance/bulk-present`) · leaves (+ approve / reject) · payroll (`GET /payroll`, `POST /payroll/generate`, `PUT/DELETE /payroll/:id`, `POST /payroll/:id/pay`, `POST /payroll/pay-all`) · `GET /accounts` · advances · recruitment (`GET /recruitment`, postings, candidates, `PATCH /candidates/:id/stage`, `GET /candidates/:id/resume`) · appraisals · disciplinary · assets (+ return) · `GET /dashboard` |
@@ -567,7 +567,7 @@ Prisma's own `_prisma_migrations`).
 |---|---|
 | Platform | `Tenant` (client/shop, plan, access period, active), `User` (role, permissions JSON, lockout, tokenVersion), `Device` (desktop PC, token hash, last seen; server only), `ChangeLog` (sync log written by triggers; server only), `Counter` (running numbers and the sync floor; never synced), `AuditLog` (append-only), `Setting` (one row per client and key, JSON value), `Secret` (SMS keys; server only) |
 | Inventory | `Category`, `Brand`, `Unit`, `Color`, `Size`, `Product` (variants are child products with `parentId`), `ProductSerial`, `StockMovement` |
-| Parties & khata | `Party` (customers and vendors, `type`), `LedgerEntry`, `PaymentPromise`, `MessageLog` |
+| Parties & khata | `Party` (customers and vendors, `type`), `LedgerEntry` (types incl. `UDHAAR` / `BILL` = amount-only entries from the phone), `PaymentPromise` (customer promises), `VendorDue` (what to pay a vendor by when), `MessageLog` |
 | Treasury | `Account`, `AccountTxn` |
 | Sales | `Sale`, `SaleItem`, `SalePayment`, `HeldSale`, `SaleReturn`, `SaleReturnItem`, `DayClose` |
 | Purchases | `Purchase`, `PurchaseItem`, `PurchaseReturn`, `PurchaseReturnItem` |
@@ -585,6 +585,7 @@ Prisma's own `_prisma_migrations`).
 | `20261121094654_sync_triggers_2` | Sync triggers for those tables |
 | `20261121095453_expense_source` | Expense `source` / `refId` |
 | `20261122182528_storage_limits` | Drops the AuditLog sync trigger; lets the retention job delete old audit rows |
+| `20261123103523_vendor_dues` | `VendorDue` table + its sync trigger |
 
 Create one with `npm run db:migrate -- --name what_changed`; hand-written SQL (triggers) goes in a migration created with
 `npx prisma migrate dev --create-only --name …`. Render applies pending migrations on every deploy.
@@ -697,7 +698,7 @@ Which tables move where is defined once in [src/sync/registry.js](../src/sync/re
 
 | Direction | Tables |
 |---|---|
-| Both ways | Setting, Category, Brand, Unit, Color, Size, Product, ProductSerial, StockMovement, Party, LedgerEntry, Account, AccountTxn, Sale, SaleItem, SalePayment, HeldSale, SaleReturn, SaleReturnItem, Purchase, PurchaseItem, PurchaseReturn, PurchaseReturnItem, Payment, ExpenseCategory, Expense, Cheque, CapitalTxn, Tax, Employee, Shift, Attendance, LeaveRequest, Payslip, Advance, JobPosting, Candidate, Appraisal, Disciplinary, AssetAssignment, PaymentPromise, MessageLog, DayClose |
+| Both ways | Setting, Category, Brand, Unit, Color, Size, Product, ProductSerial, StockMovement, Party, LedgerEntry, Account, AccountTxn, Sale, SaleItem, SalePayment, HeldSale, SaleReturn, SaleReturnItem, Purchase, PurchaseItem, PurchaseReturn, PurchaseReturnItem, Payment, ExpenseCategory, Expense, Cheque, CapitalTxn, Tax, Employee, Shift, Attendance, LeaveRequest, Payslip, Advance, JobPosting, Candidate, Appraisal, Disciplinary, AssetAssignment, PaymentPromise, MessageLog, DayClose, VendorDue |
 | Cloud → PC only | Tenant, User |
 | PC → cloud only | AuditLog |
 | Never | Device, ChangeLog, Counter, Secret |
@@ -1040,6 +1041,7 @@ migration rather than editing an applied one.
 | 2026-11-22 | Stay on the free 500 MB database: daily clean-up of housekeeping rows, PC resync from a fresh copy, size caps, storage card |
 | 2026-11-22 | Windows app updates itself from GitHub releases (Settings → App update); v1.0.0 released |
 | 2026-11-23 | Android app prepared (online, Capacitor): Bluetooth printing as a picture (Urdu-safe), Android print, share sheet; back button closes dialogs first. Build not finalised yet |
+| 2026-11-23 | Shop feedback (Punjabi): top two buttons for customers (Payment = udhaar given, Receipt); Godown Stock + **Vendors** (profiles, goods received, payments, pay-by dates with a phone alarm); expenses moved to a small button. Two code reviews (20 fixes). App 1.0.2 |
 | 2026-11-23 | The phone app is the **owner's ledger app only**: Payment, Receipt, Reports, All Accounts, Stock, Vendor Reports + Reminders (owner's sketch). POS and everything else stay on the web and the Windows app |
 
 The original plan with the phase table is in [PLAN.md](../PLAN.md); short coding rules in [docs/DEV.md](DEV.md).

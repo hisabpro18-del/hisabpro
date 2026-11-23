@@ -7,6 +7,7 @@ const canManage = () => has('parties.manage') || has('finance.manage') || has('s
 const TYPE = {
     OPENING: ['Opening balance', 'ابتدائی بقایا'], SALE: ['Sale (udhaar)', 'فروخت (ادھار)'], PAYMENT_IN: ['Payment received', 'وصولی'], SALE_RETURN: ['Return', 'واپسی'],
     CHEQUE: ['Cheque', 'چیک'], ADJUSTMENT: ['Adjustment', 'ایڈجسٹمنٹ'], PURCHASE: ['Purchase', 'خریداری'], PAYMENT_OUT: ['Payment made', 'ادائیگی'], PURCHASE_RETURN: ['Purchase return', 'خریداری واپسی'],
+    UDHAAR: ['Udhaar given', 'ادھار دیا'], BILL: ['Goods received', 'مال آیا'],
 };
 const typeLabel = (k, lang) => (TYPE[k] || [k, k])[lang === 'ur' ? 1 : 0];
 let MSG = null; // messaging settings (templates) cache

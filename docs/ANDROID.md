@@ -6,13 +6,28 @@ Windows app. The home screen shows the shop's name and:
 
 | Button | What it does |
 |---|---|
-| **Payment** (ادائیگی) | Money paid out — to a vendor (their balance goes down) or as an expense (bill, rent …); from cash or a bank account |
-| **Receipt** (وصولی) | Money received — from a customer (their udhaar goes down; WhatsApp thank-you, printed slip) or other income |
+| **Payment** (ادھار دیا) — customers | The customer took goods or cash on udhaar: an amount-only entry raises their khata; optional "will pay by" date (a promise); WhatsApp balance, printed slip |
+| **Receipt** (وصولی) — customers | Money received from a customer (their udhaar goes down; WhatsApp thank-you, printed slip) |
 | **Reports** (رپورٹس) | Today / yesterday / week / month: sales, profit, expenses, purchases, money in and out, cash & bank, to receive, to pay, low stock |
-| **All Accounts** (تمام کھاتے) | Every customer and vendor with balance; tap one for the full khata, receipt/payment, reminder, promise, statement, call |
-| **Stock** (اسٹاک) | Every product with stock, price and cost; low / out of stock filters; search or camera scan; stock value |
-| **Vendor Reports** (سپلائر رپورٹ) | Per vendor for the period: bought, paid, still owed |
-| **Reminders** (یاد دہانی) | Promises due today / late / upcoming and everyone who owes — WhatsApp or SMS reminder, new promise, receive |
+| **All Accounts** (تمام کھاتے) | Every customer and vendor with balance; a customer opens their khata (receipt, payment, reminder, promise, statement, call); a vendor opens the vendor screen |
+| **Godown Stock** (گودام اسٹاک) | Every product with stock, price and cost; low / out of stock filters; search or camera scan; stock value |
+| **Vendors** (سپلائرز) | The people goods come from: profiles (name, contact person, phone, address), **goods received** (amount-only bill with a **pay-by date**), **payments** to them, pay-by dates (pay / paid / change), khata; a **Report** tab (bought, paid, owed per period) |
+| **Reminders** (یاد دہانی) | Customers: promises due today / late / upcoming and everyone who owes (WhatsApp/SMS reminder, promise, receive). **Pay vendors**: every open pay-by date, soonest first |
+| **Kharcha / Expense** (small button) | Bills, rent, salaries paid in cash or from the bank |
+
+**Payment alerts**: on a vendor's pay-by day the phone shows a notification with sound at 10:00 ("Payment due: <vendor> — Pay Rs …"),
+even when the app is closed; tapping it opens Reminders → Pay vendors. The alarms are scheduled on the phone from the open
+pay-by dates whenever the app is opened or a date changes, and cancelled when the vendor is paid. Each due rings once (a
+date set for today after 10:00 rings within a minute; a late due that never had an alarm stays on the Reminders screen).
+Android 13+ asks to allow notifications the first time a pay-by date is saved (or from Settings → *Check alerts*).
+
+**Pay-by dates clear themselves**: payments to the vendor (from the phone, the web or the PC, including paying a purchase
+later from Purchases) pay them off oldest first; a payment made at the counter together with a purchase belongs to that
+purchase. A date cannot be marked paid by hand (a later payment would count twice) — it can be moved or removed.
+
+**Amount-only entries**: "udhaar given" and "goods received" change the khata only — no stock, no cash, no sale or
+purchase document. If a vendor's bill is also entered as a purchase on the shop computer, it must not be entered on the
+phone as well (the balance would count it twice). An entry made by mistake can be removed on the vendor screen.
 
 Phone extras: **Bluetooth slip printing** (58 / 80 mm thermal printers; the slip is sent as a picture so Urdu prints),
 **Android printing** for statements (*Save as PDF* to share), the **share sheet** for files, **WhatsApp** opens the
@@ -49,8 +64,12 @@ It needs internet. Offline selling stays with the Windows app at the counter.
   `localStorage.setItem('hp.mobileMode','1')` and reload (`removeItem` to go back).
 - Native calls use `Capacitor.nativePromise(plugin, method, options)` because the remote page does not load
   Capacitor's JavaScript packages.
-- Every phone screen uses the existing APIs (payments, expenses, khata receive, parties, ledger, reports, catalog,
-  promises); the only new endpoint is `GET /api/reports/vendors` (per-vendor bought / returned / paid / owed).
+- The phone screens use the existing APIs (payments, expenses, khata receive, parties, ledger, reports, catalog,
+  promises) plus: `GET /api/reports/vendors` (per-vendor bought / returned / paid / owed), `POST/DELETE
+  /api/khata/entries` (amount-only `UDHAAR` / `BILL` khata entries) and `GET/POST/PATCH /api/khata/dues` (vendor pay-by
+  dates, table `VendorDue`; they become PAID by themselves when later payments cover them).
+- Payment alarms: `@capacitor/local-notifications` (status-bar icon `res/drawable/ic_stat_hisabpro.xml`), scheduled by
+  `HP.native.syncAlarms()` / `refreshAlarms()` in `public/js/core/native.js`.
 - On the web and in the Windows app all of this is inert.
 
 ### Where things are
@@ -96,6 +115,10 @@ printers and printers that do not understand `GS v 0` raster images (rare).
 | ESC/POS encoder (bits, padding, trimming, bands, feed/cut, base64) | ✅ `test/mobile.test.js` |
 | `/api/mobile/android`, scripts served | ✅ `test/mobile.test.js` |
 | Web side inside a simulated app (phone size, app user agent, fake native bridge): receipt picture decoded back from the printer bytes (barcode and Urdu, nothing cut off); CSV → share sheet; A4 → Android print; back button closes a dialog first | ✅ |
+| v1.0.1 walk-through: Payment = customer udhaar with promise date; receipt customers only; expense; new vendor → goods received with pay-by date → alarm scheduled for 10:00 on that day; part payment keeps the date open, full payment clears it and cancels the alarm; profile edit; Reminders → Pay vendors | ✅ |
+| Amount-only entries, vendor pay-by dates (self-clearing oldest first — one payment never clears two; later purchase payments count, counter payments do not; move, cancel; not for a vendor owed nothing; removing a mistaken entry cancels its date or promise), permissions, sync | ✅ `test/mobile.test.js` |
+| Payment alarm rules with a controlled clock (10:00 alarms, no repeat after 10:00, catch-up once, moved dates, paid → cancelled, incomplete list never cancels) | ✅ browser test |
+| Two independent code reviews of all phone-app, sync and storage code (20 findings, all fixed — incl. Bluetooth printing on Android 12+) | ✅ |
 | Ledger app walk-through in the simulated app: staff turned away, owner lands on the home screen, POS unreachable; vendor payment, expense and customer receipt saved with correct balances; slip sent to the printer; WhatsApp thank-you; reports, all accounts, khata, stock (camera search), vendor reports, reminders, settings; Urdu right-to-left; the normal web never shows the phone screens | ✅ |
 | Vendor report figures (bought, returned, paid, owed) | ✅ `test/mobile.test.js` |
 | Gradle build of the APK | ⏳ needs the tools in §3 |
@@ -212,7 +235,10 @@ Store → *Install anyway*. Then sign in with the user's usual HisabPro email an
 
 - [ ] Installs over the previous release (same key) and keeps the login.
 - [ ] Owner signs in and lands on the 6 buttons + Reminders; a cashier login is refused; Urdu switch, night mode.
-- [ ] Payment to a vendor and an expense; Receipt from a customer (balances change correctly on the web too).
+- [ ] Payment (udhaar) and Receipt for a customer; an expense (balances change correctly on the web too).
+- [ ] Vendors: add a vendor, goods received with pay-by "+3 days", pay part and then the rest (the date clears).
+- [ ] Payment alert: set a pay-by date for today → a notification with sound appears within about a minute; allow
+      notifications when Android asks; tapping it opens Pay vendors; opening the app again does not ring it twice.
 - [ ] Slip prints on a 58 mm and an 80 mm Bluetooth printer: full width, nothing cut, Urdu readable.
 - [ ] Printer off / unpaired → clear message with *Try again*, *Choose printer*, *Android print*.
 - [ ] Customer statement → Android print → Save as PDF → share.

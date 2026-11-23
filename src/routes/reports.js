@@ -334,7 +334,7 @@ router.get('/vendors', VIEW, async (req, res) => {
     for (const s of sums) {
         const v = per.get(s.partyId);
         const debit = N(s._sum.debit || 0), credit = N(s._sum.credit || 0);
-        if (s.type === 'PURCHASE') v.purchased += credit - debit;
+        if (s.type === 'PURCHASE' || s.type === 'BILL') v.purchased += credit - debit; // BILL: goods received entered on the phone (amount only)
         else if (s.type === 'PURCHASE_RETURN') v.returned += debit - credit;
         else if (s.type === 'PAYMENT_OUT' || s.type === 'CHEQUE') v.paid += debit - credit;
     }

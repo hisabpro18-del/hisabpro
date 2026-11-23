@@ -931,9 +931,30 @@ model PaymentPromise {
   lastAutoDay  String    @default("") // the day an automatic SMS was last sent (at most one a day)
   keptAt       DateTime?
   createdById  String?
+  refId        String? // the khata entry ("udhaar given", phone app) it was made with
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @default(now())
   deletedAt    DateTime?
+
+  @@index([tenantId, status])
+}
+
+// A payment the shop must make to a vendor by a date (goods received on credit) — the phone app's vendor reminders.
+// It becomes PAID by itself when payments made after it cover it (oldest first) or the vendor is owed nothing.
+model VendorDue {
+  id          String    @id @default(uuid())
+  tenantId    String
+  partyId     String
+  amount      BigInt // paisa to pay
+  dueDate     String // YYYY-MM-DD (shop calendar day)
+  note        String    @default("")
+  status      String    @default("PENDING") // PENDING | PAID | CANCELLED
+  refId       String? // the khata entry ("goods received") it belongs to
+  paidAt      DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  deletedAt   DateTime?
 
   @@index([tenantId, status])
 }

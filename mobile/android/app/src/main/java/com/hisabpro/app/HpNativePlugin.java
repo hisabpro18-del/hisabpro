@@ -141,7 +141,9 @@ public class HpNativePlugin extends Plugin {
             BluetoothSocket socket = null;
             try {
                 BluetoothDevice device = a.getRemoteDevice(address);
-                a.cancelDiscovery(); // discovery slows a connection down a lot
+                // a running discovery slows the connection down; stopping it needs BLUETOOTH_SCAN on Android 12+, which
+                // HisabPro does not ask for — so it is only tried, and printing goes on either way
+                try { a.cancelDiscovery(); } catch (SecurityException ignored) { }
                 try {
                     socket = device.createRfcommSocketToServiceRecord(SPP);
                     socket.connect();

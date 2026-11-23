@@ -4,6 +4,7 @@
 // nothing here has its own money logic. The full app (POS, HR, settings …) stays on the web and the Windows app.
 const { html, raw, icon, api, ui, fmt, t } = HP;
 const go = p => HP.router.navigate(p);
+const can = k => Perms.has(HP.session, k);
 const isUr = () => HP.lang() === 'ur';
 const shopName = () => (HP.session.settings && HP.session.settings.company && HP.session.settings.company.name) || (HP.session.tenant && HP.session.tenant.name) || 'HisabPro';
 const COLS = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5' };
@@ -101,152 +102,177 @@ function done(el, { title, lines, actions }) {
       <div class="mt-8 grid gap-2.5">${actions.map(([key, label, iconName, primary]) => html`<button type="button" class="btn ${primary ? 'btn-primary' : 'btn-outline'} h-12 w-full justify-center text-base" data-done="${key}">${icon(iconName)}${t(label)}</button>`)}</div>`);
 }
 
+// ── dates, due badges, small form pieces ──
+const today = () => fmt.ymd(new Date());
+const plusDays = n => fmt.ymd(new Date(Date.now() + n * 86400000));
+const dueBadge = days => (days < 0 ? ui.badge(`${-days} ${t('days late')}`, 'bad') : days === 0 ? ui.badge(t('Today'), 'warn') : ui.badge(`${t('in')} ${days} ${t('days')}`, 'accent'));
+// quick "+3 days" … buttons that fill a date field
+const dayChips = name => html`<div class="flex flex-wrap gap-2">${[3, 7, 15, 30].map(n => html`<button type="button" class="chip normal-case" data-days="${n}" data-for="${name}">+${n} ${t('days')}</button>`)}</div>`;
+function bindDayChips(root) {
+    root.addEventListener('click', e => { const b = e.target.closest('[data-days]'); if (!b) return; const f = root.querySelector(`[name="${b.dataset.for}"]`); if (f) f.value = plusDays(Number(b.dataset.days)); });
+}
+// the big "choose customer / vendor" button at the top of a form
+const partyButton = (party, type) => html`<button type="button" class="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface p-4 text-start shadow-sm" data-choose>
+    ${party ? html`${avatar(party.name, type === 'VENDOR' ? 'bad' : 'warn')}<span class="min-w-0 flex-1"><span class="block truncate font-semibold">${party.name}</span><span class="block text-xs text-muted">${t('Tap to change')}</span></span>${amountRow(type, party.balance)}`
+      : html`<span class="flex h-10 w-10 items-center justify-center rounded-full bg-surface-2 text-muted">${icon(type === 'VENDOR' ? 'truck' : 'user')}</span><span class="flex-1 font-medium text-muted">${type === 'VENDOR' ? t('Choose vendor') : t('Choose customer')}</span>${icon('chevronRight', 'w-5 h-5 text-muted rtl:rotate-180')}`}</button>`;
+// "paid from / received in" account (cash, bank, wallet)
+const accountField = (accounts, label, value) => (accounts.length ? ui.field({ label, name: 'accountId', type: 'select', value: value || (accounts.find(a => a.type === 'CASH') || accounts[0]).id, options: accounts.map(a => [a.id, `${a.name} — ${fmt.money(a.balance)}`]) }) : '');
+const liveAccounts = async () => (await api.get('/api/finance/accounts').catch(() => [])).filter(a => a.active !== false);
+
 // ═════════════════════════ Home ═════════════════════════
 HP.page('/m', {
     title: 'Home', mobile: true,
     async render(el) {
         const [k, v] = await Promise.all([api.get('/api/khata/summary').catch(() => null), api.get('/api/parties/stats', { type: 'VENDOR' }).catch(() => null)]);
         const kp = (k && k.kpis) || {};
-        const tile = (href, iconName, label, urdu, tone) => html`<a href="${href}" data-link class="flex min-h-[118px] flex-col justify-between rounded-2xl border border-line bg-surface p-4 shadow-sm transition active:scale-[.98]">
+        if (HP.native && HP.native.refreshAlarms) HP.native.refreshAlarms(); // payment alarms for vendor dues
+        const tile = (href, iconName, label, urdu, tone, caption) => html`<a href="${href}" data-link class="flex min-h-[124px] flex-col justify-between rounded-2xl border border-line bg-surface p-4 shadow-sm transition active:scale-[.98]">
             <span class="flex h-11 w-11 items-center justify-center rounded-xl ${TONE[tone]}">${icon(iconName, 'w-6 h-6')}</span>
-            <span><span class="block text-base font-bold leading-tight">${t(label)}</span>${isUr() ? '' : html`<span class="block text-sm text-muted">${urdu}</span>`}</span></a>`;
-        const due = (kp.dueToday || 0) + (kp.overdue || 0);
+            <span><span class="block text-base font-bold leading-tight">${t(label)}</span>${isUr() ? '' : html`<span class="block text-sm text-muted">${urdu}</span>`}${caption ? html`<span class="mt-0.5 block text-[11px] leading-tight text-muted">${caption}</span>` : ''}</span></a>`;
+        const collect = (kp.dueToday || 0) + (kp.overdue || 0), pay = (kp.vendorDueToday || 0) + (kp.vendorOverdue || 0);
         ui.mount(el, html`
           <div class="rounded-2xl bg-primary p-5 text-primary-fg shadow-sm">
             <div class="text-xs opacity-80">${fmt.longDate(new Date())}</div>
             <div class="mt-1 text-2xl font-bold leading-tight">${shopName()}</div>
             <div class="mt-4 grid grid-cols-2 gap-3">
               <a href="/m/accounts?tab=CUSTOMER" data-link class="rounded-xl bg-white/15 px-3 py-2"><div class="text-xs opacity-80">${t('To receive')}</div><div class="whitespace-nowrap text-base font-bold">${fmt.money(kp.totalReceivable || 0)}</div></a>
-              <a href="/m/accounts?tab=VENDOR" data-link class="rounded-xl bg-white/15 px-3 py-2"><div class="text-xs opacity-80">${t('To pay')}</div><div class="whitespace-nowrap text-base font-bold">${fmt.money((v && v.payables) || 0)}</div></a></div></div>
-          <div class="mt-4 grid grid-cols-2 gap-3">
-            ${tile('/m/payment', 'arrowUp', 'Payment', 'ادائیگی', 'bad')}${tile('/m/receipt', 'arrowDown', 'Receipt', 'وصولی', 'good')}
+              <a href="/m/vendors" data-link class="rounded-xl bg-white/15 px-3 py-2"><div class="text-xs opacity-80">${t('To pay')}</div><div class="whitespace-nowrap text-base font-bold">${fmt.money((v && v.payables) || 0)}</div></a></div></div>
+          <div class="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide text-muted">${t('Customers')}${isUr() ? '' : ' · گاہک'}</div>
+          <div class="grid grid-cols-2 gap-3">
+            ${tile('/m/payment', 'arrowUp', 'Payment', 'ادھار دیا', 'warn', t('Customer took on udhaar'))}${tile('/m/receipt', 'arrowDown', 'Receipt', 'وصولی', 'good', t('Customer paid you'))}</div>
+          <div class="mt-3 grid grid-cols-2 gap-3">
             ${tile('/m/reports', 'chart', 'Reports', 'رپورٹس', 'accent')}${tile('/m/accounts', 'users', 'All Accounts', 'تمام کھاتے', 'accent')}
-            ${tile('/m/stock', 'package', 'Stock', 'اسٹاک', 'warn')}${tile('/m/vendors', 'truck', 'Vendor Reports', 'سپلائر رپورٹ', 'bad')}</div>
-          <a href="/m/reminders" data-link class="mt-3 flex items-center gap-4 rounded-2xl border border-line bg-surface p-4 shadow-sm transition active:scale-[.98]">
-            <span class="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-warn-soft text-warn">${icon('bell', 'w-6 h-6')}${due ? html`<span class="absolute -end-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-bad px-1 text-[11px] font-bold text-white">${due}</span>` : ''}</span>
+            ${tile('/m/stock', 'package', 'Godown Stock', 'گودام اسٹاک', 'warn')}${tile('/m/vendors', 'truck', 'Vendors', 'سپلائرز', 'bad', pay ? html`<span class="font-semibold text-bad">${pay} ${t('to pay now')}</span>` : t('Goods & payments'))}</div>
+          <a href="/m/reminders${!collect && pay ? '?view=vendors' : ''}" data-link class="mt-3 flex items-center gap-4 rounded-2xl border border-line bg-surface p-4 shadow-sm transition active:scale-[.98]">
+            <span class="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-warn-soft text-warn">${icon('bell', 'w-6 h-6')}${collect + pay ? html`<span class="absolute -end-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-bad px-1 text-[11px] font-bold text-white">${collect + pay}</span>` : ''}</span>
             <span class="min-w-0 flex-1"><span class="block text-base font-bold">${t('Reminders')}${isUr() ? '' : html` <span class="font-normal text-muted">· یاد دہانی</span>`}</span>
-              <span class="block text-sm text-muted">${kp.dueToday || 0} ${t('due today')} · ${kp.overdue || 0} ${t('late')} · ${kp.customersOwing || 0} ${t('owe you')}</span></span>
-            ${icon('chevronRight', 'w-5 h-5 text-muted rtl:rotate-180')}</a>`);
+              <span class="block text-sm text-muted">${kp.dueToday || 0} ${t('to collect today')} · ${kp.overdue || 0} ${t('late')} · ${pay} ${t('vendors to pay')}</span></span>
+            ${icon('chevronRight', 'w-5 h-5 text-muted rtl:rotate-180')}</a>
+          <a href="/m/expense" data-link class="mt-3 flex h-12 items-center justify-center gap-2 rounded-xl border border-dashed border-line text-sm font-medium text-muted">${icon('wallet', 'w-4 h-4')}${t('Kharcha / Expense')}${isUr() ? '' : ' · خرچہ'}</a>`);
     },
 });
 
-// ═════════════════════════ Payment (money out) ═════════════════════════
+// ═════════════════════════ Payment: udhaar given to a customer ═════════════════════════
+// The customer took goods or cash on credit: the amount goes into their khata (an amount-only entry, no stock).
 HP.page('/m/payment', {
-    title: 'Payment', mobile: true, perm: 'finance.manage',
+    title: 'Payment', mobile: true, perm: 'parties.manage', // customer list + khata entries
     async render(el, params, query) {
-        const [accounts, cats] = await Promise.all([api.get('/api/finance/accounts').catch(() => []), api.get('/api/finance/expense-categories').catch(() => [])]);
-        const live = accounts.filter(a => a.active !== false);
-        let kind = query.kind === 'expense' ? 'EXPENSE' : 'VENDOR';
         let party = query.party ? await api.get('/api/parties/' + query.party).catch(() => null) : null;
+        if (party && party.type !== 'CUSTOMER') party = null;
         let kept = {};
         const draw = () => {
-            ui.mount(el, html`${seg2('kind', [['VENDOR', 'To a vendor'], ['EXPENSE', 'Expense']], kind)}
+            ui.mount(el, html`<p class="rounded-xl bg-warn-soft px-4 py-3 text-sm text-warn">${t('Customer took goods or cash on udhaar: the amount is added to their khata.')}</p>
               <form class="mt-4 space-y-4" data-form novalidate>
-                ${kind === 'VENDOR' ? html`<button type="button" class="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface p-4 text-start shadow-sm" data-choose>
-                    ${party ? html`${avatar(party.name, 'bad')}<span class="min-w-0 flex-1"><span class="block truncate font-semibold">${party.name}</span><span class="block text-xs text-muted">${t('Tap to change')}</span></span>${amountRow('VENDOR', party.balance)}`
-                      : html`<span class="flex h-10 w-10 items-center justify-center rounded-full bg-surface-2 text-muted">${icon('truck')}</span><span class="flex-1 font-medium text-muted">${t('Choose vendor')}</span>${icon('chevronRight', 'w-5 h-5 text-muted rtl:rotate-180')}`}</button>`
-                  : ui.grid(
-                    ui.field({ label: 'Expense type', name: 'categoryId', type: 'select', value: kept.categoryId || '', options: [['', t('Choose…')], ...cats.map(c => [c.id, c.name])] }),
-                    ui.field({ label: 'Paid to (optional)', name: 'payee', value: kept.payee || '', placeholder: 'e.g. LESCO, landlord' }))}
+                ${partyButton(party, 'CUSTOMER')}
                 ${ui.grid(
-                    ui.field({ label: 'Amount', name: 'amount', money: true, required: true, value: kept.amount || '', attr: { inputmode: 'decimal', autofocus: !!party || kind === 'EXPENSE' } }),
-                    live.length ? ui.field({ label: 'Paid from', name: 'accountId', type: 'select', value: kept.accountId || (live.find(a => a.type === 'CASH') || live[0]).id, options: live.map(a => [a.id, `${a.name} — ${fmt.money(a.balance)}`]) }) : '',
-                    ui.field({ label: 'Date', name: 'date', type: 'date', value: kept.date || fmt.ymd(new Date()), half: true }),
-                    ui.field({ label: 'Note', name: 'note', value: kept.note || '', half: true, placeholder: 'optional' }))}
-                ${kind === 'VENDOR' && party && party.balance > 0 ? html`<button type="button" class="chip normal-case" data-full>${t('Full balance')} ${fmt.money(party.balance)}</button>` : ''}
-                <button class="btn btn-primary h-12 w-full justify-center text-base" data-save>${icon('check')}${t('Save payment')}</button></form>`);
+                    ui.field({ label: 'Udhaar amount', name: 'amount', money: true, required: true, value: kept.amount || '', attr: { inputmode: 'decimal', autofocus: !!party } }),
+                    ui.field({ label: 'Date', name: 'date', type: 'date', value: kept.date || today(), half: true, attr: { max: today() } }),
+                    ui.field({ label: 'Note', name: 'note', value: kept.note || '', half: true, placeholder: 'e.g. goods on credit' }),
+                    ui.field({ label: 'Will pay by (optional)', name: 'dueDate', type: 'date', value: kept.dueDate || '', attr: { min: today() } }))}
+                ${dayChips('dueDate')}
+                <button class="btn btn-primary h-12 w-full justify-center text-base" data-save>${icon('check')}${t('Add to khata')}</button></form>`);
         };
         const keep = () => { const f = el.querySelector('[data-form]'); if (f) kept = ui.readForm(f); };
         draw();
-        ui.on(el, 'click', '[data-seg2="kind"] [data-v]', (e, b) => { keep(); kind = b.dataset.v; draw(); });
-        ui.on(el, 'click', '[data-choose]', async () => { keep(); const p = await pickParty('VENDOR'); if (p) { party = p; draw(); } });
-        ui.on(el, 'click', '[data-full]', () => { el.querySelector('[name=amount]').value = (party.balance / 100).toFixed(2); });
+        bindDayChips(el);
+        ui.on(el, 'click', '[data-choose]', async () => { keep(); const p = await pickParty('CUSTOMER'); if (p) { party = p; draw(); } });
         ui.on(el, 'submit', '[data-form]', e => e.preventDefault());
         ui.on(el, 'click', '[data-save]', async (e, btn) => {
             e.preventDefault();
             const v = ui.readForm(el.querySelector('[data-form]'));
-            if (kind === 'VENDOR' && !party) return ui.toast(t('Choose the vendor first.'), 'error');
+            if (!party) return ui.toast(t('Choose the customer first.'), 'error');
             if (!(v.amount > 0)) return ui.toast(t('Enter the amount.'), 'error');
-            const acc = live.find(a => a.id === v.accountId);
-            const method = acc ? methodFor(acc.type) : 'CASH';
             btn.disabled = true;
             try {
-                if (kind === 'VENDOR') {
-                    const r = await api.post('/api/finance/payments', { direction: 'OUT', partyId: party.id, amount: v.amount, method, accountId: v.accountId || null, date: v.date, note: v.note });
-                    const after = await api.get('/api/parties/' + party.id).catch(() => ({ balance: party.balance - v.amount }));
-                    const slip = { title: 'PAYMENT MADE / ادائیگی', number: r.number, partyLabel: 'Paid to', partyName: party.name, amount: v.amount, method: METHOD_LABEL[method], balance: after.balance, balanceLabel: after.balance >= 0 ? 'Still to pay' : 'Advance', note: v.note };
-                    done(el, { title: `${fmt.money(v.amount)} ${t('paid')}`, lines: [`${party.name} · ${r.number}`, `${t(balanceWords('VENDOR', after.balance).label)}: ${fmt.money(Math.abs(after.balance))}`],
-                        actions: [['print', 'Print slip', 'printer'], ['again', 'New payment', 'plus', true], ['ledger', 'Open khata', 'file'], ['home', 'Home', 'grid']] });
-                    ui.on(el, 'click', '[data-done]', (ev, b) => { const k = b.dataset.done; if (k === 'print') printSlip(slip); else if (k === 'again') go('/m/payment'); else if (k === 'ledger') go('/m/accounts/' + party.id); else go('/m'); });
-                } else {
-                    const r = await api.post('/api/finance/expenses', { categoryId: v.categoryId || null, payee: v.payee, amount: v.amount, method, accountId: v.accountId || null, date: v.date, note: v.note });
-                    const cat = cats.find(c => c.id === v.categoryId);
-                    const slip = { title: 'EXPENSE / خرچہ', number: r.reference, partyLabel: 'Paid to', partyName: v.payee || (cat ? cat.name : ''), amount: v.amount, method: METHOD_LABEL[method], note: v.note };
-                    done(el, { title: `${fmt.money(v.amount)} ${t('expense saved')}`, lines: [[cat ? cat.name : t('Expense'), v.payee, r.reference].filter(Boolean).join(' · ')],
-                        actions: [['print', 'Print slip', 'printer'], ['again', 'New payment', 'plus', true], ['home', 'Home', 'grid']] });
-                    ui.on(el, 'click', '[data-done]', (ev, b) => { const k = b.dataset.done; if (k === 'print') printSlip(slip); else if (k === 'again') go('/m/payment?kind=expense'); else go('/m'); });
-                }
+                const r = await api.post('/api/khata/entries', { kind: 'UDHAAR', partyId: party.id, amount: v.amount, date: v.date, note: v.note, dueDate: v.dueDate || null });
+                const slip = { title: 'UDHAAR / ادھار', number: r.number, partyLabel: 'Customer', partyName: party.name, amount: r.amount, balance: r.balance, balanceLabel: 'Total balance / کل بقایا', note: v.note };
+                done(el, { title: `${fmt.money(r.amount)} ${t('added to khata')}`, lines: [`${party.name} · ${r.number}`, `${t('You receive')}: ${fmt.money(r.balance)}`, ...(v.dueDate ? [`${t('Will pay by')} ${fmt.date(v.dueDate)}`] : [])],
+                    actions: [['wa', 'Send balance on WhatsApp', 'arrowRight', true], ['print', 'Print slip', 'printer'], ['again', 'New payment', 'plus'], ['home', 'Home', 'grid']] });
+                ui.on(el, 'click', '[data-done]', (ev, b) => {
+                    const k = b.dataset.done;
+                    if (k === 'wa') HP.khata.sendReminder({ ...party, balance: r.balance }, { kind: 'BALANCE_REMINDER' });
+                    else if (k === 'print') printSlip(slip); else if (k === 'again') go('/m/payment'); else go('/m');
+                });
             } catch (err) { ui.fail(err); btn.disabled = false; }
         });
     },
 });
 
-// ═════════════════════════ Receipt (money in) ═════════════════════════
+// ═════════════════════════ Kharcha / Expense ═════════════════════════
+HP.page('/m/expense', {
+    title: 'Kharcha / Expense', mobile: true, perm: 'finance.manage',
+    async render(el) {
+        const [live, cats] = await Promise.all([liveAccounts(), api.get('/api/finance/expense-categories').catch(() => [])]);
+        ui.mount(el, html`<form class="space-y-4" data-form novalidate>${ui.grid(
+                ui.field({ label: 'Expense type', name: 'categoryId', type: 'select', options: [['', t('Choose…')], ...cats.map(c => [c.id, c.name])] }),
+                ui.field({ label: 'Paid to (optional)', name: 'payee', placeholder: 'e.g. LESCO, landlord' }),
+                ui.field({ label: 'Amount', name: 'amount', money: true, required: true, attr: { inputmode: 'decimal' } }),
+                accountField(live, 'Paid from'),
+                ui.field({ label: 'Date', name: 'date', type: 'date', value: today(), half: true, attr: { max: today() } }),
+                ui.field({ label: 'Note', name: 'note', half: true, placeholder: 'optional' }))}
+            <button class="btn btn-primary h-12 w-full justify-center text-base" data-save>${icon('check')}${t('Save expense')}</button></form>`);
+        ui.on(el, 'submit', '[data-form]', e => e.preventDefault());
+        ui.on(el, 'click', '[data-save]', async (e, btn) => {
+            e.preventDefault();
+            const v = ui.readForm(el.querySelector('[data-form]'));
+            if (!(v.amount > 0)) return ui.toast(t('Enter the amount.'), 'error');
+            const acc = live.find(a => a.id === v.accountId);
+            const method = acc ? methodFor(acc.type) : 'CASH';
+            btn.disabled = true;
+            try {
+                const r = await api.post('/api/finance/expenses', { categoryId: v.categoryId || null, payee: v.payee, amount: v.amount, method, accountId: v.accountId || null, date: v.date, note: v.note });
+                const cat = cats.find(c => c.id === v.categoryId);
+                const slip = { title: 'EXPENSE / خرچہ', number: r.reference, partyLabel: 'Paid to', partyName: v.payee || (cat ? cat.name : ''), amount: v.amount, method: METHOD_LABEL[method], note: v.note };
+                done(el, { title: `${fmt.money(v.amount)} ${t('expense saved')}`, lines: [[cat ? cat.name : t('Expense'), v.payee, r.reference].filter(Boolean).join(' · ')],
+                    actions: [['print', 'Print slip', 'printer'], ['again', 'New expense', 'plus', true], ['home', 'Home', 'grid']] });
+                ui.on(el, 'click', '[data-done]', (ev, b) => { const k = b.dataset.done; if (k === 'print') printSlip(slip); else if (k === 'again') go('/m/expense'); else go('/m'); });
+            } catch (err) { ui.fail(err); btn.disabled = false; }
+        });
+    },
+});
+
+// ═════════════════════════ Receipt: money received from a customer ═════════════════════════
 HP.page('/m/receipt', {
-    title: 'Receipt', mobile: true, perm: ['parties.manage', 'finance.manage'],
+    title: 'Receipt', mobile: true, perm: 'parties.manage', // customer list + receive
     async render(el, params, query) {
-        const accounts = await api.get('/api/finance/accounts').catch(() => []);
-        const live = accounts.filter(a => a.active !== false);
-        let kind = query.kind === 'other' ? 'OTHER' : 'CUSTOMER';
+        const live = await liveAccounts();
         let party = query.party ? await api.get('/api/parties/' + query.party).catch(() => null) : null;
+        if (party && party.type !== 'CUSTOMER') party = null;
         let kept = {};
         const draw = () => {
-            ui.mount(el, html`${seg2('kind', [['CUSTOMER', 'From a customer'], ['OTHER', 'Other income']], kind)}
+            ui.mount(el, html`<p class="rounded-xl bg-good-soft px-4 py-3 text-sm text-good">${t('Customer paid you: the amount is taken off their khata.')}</p>
               <form class="mt-4 space-y-4" data-form novalidate>
-                ${kind === 'CUSTOMER' ? html`<button type="button" class="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface p-4 text-start shadow-sm" data-choose>
-                    ${party ? html`${avatar(party.name, 'warn')}<span class="min-w-0 flex-1"><span class="block truncate font-semibold">${party.name}</span><span class="block text-xs text-muted">${t('Tap to change')}</span></span>${amountRow('CUSTOMER', party.balance)}`
-                      : html`<span class="flex h-10 w-10 items-center justify-center rounded-full bg-surface-2 text-muted">${icon('user')}</span><span class="flex-1 font-medium text-muted">${t('Choose customer')}</span>${icon('chevronRight', 'w-5 h-5 text-muted rtl:rotate-180')}`}</button>`
-                  : ui.grid(ui.field({ label: 'Received from / for', name: 'reference', value: kept.reference || '', placeholder: 'e.g. scrap sale, commission' }))}
+                ${partyButton(party, 'CUSTOMER')}
                 ${ui.grid(
                     ui.field({ label: 'Amount received', name: 'amount', money: true, required: true, value: kept.amount || '', attr: { inputmode: 'decimal', autofocus: !!party } }),
-                    live.length ? ui.field({ label: 'Received in', name: 'accountId', type: 'select', value: kept.accountId || (live.find(a => a.type === 'CASH') || live[0]).id, options: live.map(a => [a.id, `${a.name} — ${fmt.money(a.balance)}`]) }) : '',
-                    kind === 'OTHER' ? ui.field({ label: 'Date', name: 'date', type: 'date', value: kept.date || fmt.ymd(new Date()), half: true }) : '',
-                    ui.field({ label: 'Note', name: 'note', value: kept.note || '', half: kind === 'OTHER', placeholder: 'optional' }))}
-                ${kind === 'CUSTOMER' && party && party.balance > 0 ? html`<button type="button" class="chip normal-case" data-full>${t('Full balance')} ${fmt.money(party.balance)}</button>` : ''}
+                    accountField(live, 'Received in', kept.accountId),
+                    ui.field({ label: 'Note', name: 'note', value: kept.note || '', placeholder: 'optional' }))}
+                ${party && party.balance > 0 ? html`<button type="button" class="chip normal-case" data-full>${t('Full balance')} ${fmt.money(party.balance)}</button>` : ''}
                 <button class="btn btn-primary h-12 w-full justify-center text-base" data-save>${icon('check')}${t('Save receipt')}</button></form>`);
         };
         const keep = () => { const f = el.querySelector('[data-form]'); if (f) kept = ui.readForm(f); };
         draw();
-        ui.on(el, 'click', '[data-seg2="kind"] [data-v]', (e, b) => { keep(); kind = b.dataset.v; draw(); });
         ui.on(el, 'click', '[data-choose]', async () => { keep(); const p = await pickParty('CUSTOMER'); if (p) { party = p; draw(); } });
         ui.on(el, 'click', '[data-full]', () => { el.querySelector('[name=amount]').value = (party.balance / 100).toFixed(2); });
         ui.on(el, 'submit', '[data-form]', e => e.preventDefault());
         ui.on(el, 'click', '[data-save]', async (e, btn) => {
             e.preventDefault();
             const v = ui.readForm(el.querySelector('[data-form]'));
-            if (kind === 'CUSTOMER' && !party) return ui.toast(t('Choose the customer first.'), 'error');
+            if (!party) return ui.toast(t('Choose the customer first.'), 'error');
             if (!(v.amount > 0)) return ui.toast(t('Enter the amount.'), 'error');
             const acc = live.find(a => a.id === v.accountId);
             const method = acc ? methodFor(acc.type) : 'CASH';
             btn.disabled = true;
             try {
-                if (kind === 'CUSTOMER') {
-                    const r = await api.post('/api/khata/receive', { partyId: party.id, amount: v.amount, method, accountId: v.accountId || null, note: v.note });
-                    const slip = { title: 'PAYMENT RECEIVED / وصولی', number: r.number, partyLabel: 'Received from', partyName: party.name, amount: r.amount, method: METHOD_LABEL[method], balance: r.balance, balanceLabel: r.balance >= 0 ? 'Balance due / بقایا' : 'Advance', note: v.note };
-                    done(el, { title: `${fmt.money(r.amount)} ${t('received')}`, lines: [`${party.name} · ${r.number}`, `${t(balanceWords('CUSTOMER', r.balance).label)}: ${fmt.money(Math.abs(r.balance))}`],
-                        actions: [['wa', 'Send thank-you on WhatsApp', 'arrowRight', true], ['print', 'Print slip', 'printer'], ['again', 'New receipt', 'plus'], ['home', 'Home', 'grid']] });
-                    ui.on(el, 'click', '[data-done]', (ev, b) => {
-                        const k = b.dataset.done;
-                        if (k === 'wa') HP.khata.sendReminder({ ...party, balance: r.balance }, { kind: 'PAYMENT_THANKS', extra: { amount: HP.wa.ltr(HP.wa.rs(r.amount)) }, refId: r.id });
-                        else if (k === 'print') printSlip(slip); else if (k === 'again') go('/m/receipt'); else go('/m');
-                    });
-                } else {
-                    const r = await api.post('/api/finance/payments', { direction: 'IN', amount: v.amount, method, accountId: v.accountId || null, date: v.date, reference: v.reference, note: v.note });
-                    const slip = { title: 'PAYMENT RECEIVED / وصولی', number: r.number, partyLabel: 'For', partyName: v.reference, amount: v.amount, method: METHOD_LABEL[method], note: v.note };
-                    done(el, { title: `${fmt.money(v.amount)} ${t('received')}`, lines: [[v.reference, r.number].filter(Boolean).join(' · ')],
-                        actions: [['print', 'Print slip', 'printer'], ['again', 'New receipt', 'plus', true], ['home', 'Home', 'grid']] });
-                    ui.on(el, 'click', '[data-done]', (ev, b) => { const k = b.dataset.done; if (k === 'print') printSlip(slip); else if (k === 'again') go('/m/receipt?kind=other'); else go('/m'); });
-                }
+                const r = await api.post('/api/khata/receive', { partyId: party.id, amount: v.amount, method, accountId: v.accountId || null, note: v.note });
+                const slip = { title: 'PAYMENT RECEIVED / وصولی', number: r.number, partyLabel: 'Received from', partyName: party.name, amount: r.amount, method: METHOD_LABEL[method], balance: r.balance, balanceLabel: r.balance >= 0 ? 'Balance due / بقایا' : 'Advance', note: v.note };
+                done(el, { title: `${fmt.money(r.amount)} ${t('received')}`, lines: [`${party.name} · ${r.number}`, `${t(balanceWords('CUSTOMER', r.balance).label)}: ${fmt.money(Math.abs(r.balance))}`],
+                    actions: [['wa', 'Send thank-you on WhatsApp', 'arrowRight', true], ['print', 'Print slip', 'printer'], ['again', 'New receipt', 'plus'], ['home', 'Home', 'grid']] });
+                ui.on(el, 'click', '[data-done]', (ev, b) => {
+                    const k = b.dataset.done;
+                    if (k === 'wa') HP.khata.sendReminder({ ...party, balance: r.balance }, { kind: 'PAYMENT_THANKS', extra: { amount: HP.wa.ltr(HP.wa.rs(r.amount)) }, refId: r.id });
+                    else if (k === 'print') printSlip(slip); else if (k === 'again') go('/m/receipt'); else go('/m');
+                });
             } catch (err) { ui.fail(err); btn.disabled = false; }
         });
     },
@@ -276,11 +302,11 @@ HP.page('/m/reports', {
                     ${stat('Cash & bank', fmt.money(d.live.cashBank))}
                     <a href="/m/stock?filter=LOW" data-link>${stat('Low stock items', String(d.lowStockCount || 0), d.lowStockCount ? 'warn' : '')}</a>
                     <a href="/m/accounts?tab=CUSTOMER" data-link>${stat('To receive', fmt.money(d.live.receivable), 'warn')}</a>
-                    <a href="/m/accounts?tab=VENDOR" data-link>${stat('To pay', fmt.money(d.live.payable), 'bad')}</a></div>
+                    <a href="/m/vendors" data-link>${stat('To pay', fmt.money(d.live.payable), 'bad')}</a></div>
                   <p class="mt-4 text-center text-xs text-muted">${d.range.fromDay === d.range.toDay ? fmt.date(d.range.fromDay) : `${fmt.date(d.range.fromDay)} – ${fmt.date(d.range.toDay)}`}</p>`);
             } catch (e) { ui.mount(body, html`<div class="text-sm text-bad">${e.message}</div>`); }
         };
-        ui.on(el, 'click', '[data-chips="period"] [data-v]', (e, b) => { preset = b.dataset.v; history.replaceState({}, '', '/m/reports?preset=' + preset); load(); });
+        ui.on(el, 'click', '[data-chips="period"] [data-v]', (e, b) => { preset = b.dataset.v; history.replaceState(history.state, '', '/m/reports?preset=' + preset); load(); });
         await load();
     },
 });
@@ -302,7 +328,7 @@ HP.page('/m/accounts', {
             const rows = list.filter(p => (tab === 'ALL' || p.type === tab) && (!s || p.name.toLowerCase().includes(s) || String(p.phone || '').includes(s)))
                 .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance) || a.name.localeCompare(b.name));
             el.querySelector('[data-list]').innerHTML = String(rows.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm">${rows.slice(0, 300).map(p => html`
-                <a href="/m/accounts/${p.id}" data-link class="flex items-center gap-3 px-4 py-3">${avatar(p.name, p.type === 'VENDOR' ? 'bad' : 'warn')}
+                <a href="${p.type === 'VENDOR' ? '/m/vendors/' : '/m/accounts/'}${p.id}" data-link class="flex items-center gap-3 px-4 py-3">${avatar(p.name, p.type === 'VENDOR' ? 'bad' : 'warn')}
                   <span class="min-w-0 flex-1"><span class="block truncate font-medium">${p.name}</span><span class="block text-xs text-muted">${p.type === 'VENDOR' ? t('Vendor') : t('Customer')}${p.phone ? ' · ' + p.phone : ''}</span></span>${amountRow(p.type, p.balance)}</a>`)}</div>`
                 : empty(list.length ? 'Nothing matches.' : 'No customers or vendors yet.'));
         };
@@ -314,7 +340,7 @@ HP.page('/m/accounts', {
               <button type="button" class="btn btn-primary h-11" data-add aria-label="${t('Add')}">${icon('userPlus')}</button></div>
             <div class="mt-3" data-list></div>`);
         drawList();
-        const setTab = v => { tab = v; history.replaceState({}, '', '/m/accounts' + (tab === 'ALL' ? '' : '?tab=' + tab)); el.querySelectorAll('[data-seg2="tab"] [data-v]').forEach(b => { const on = b.dataset.v === tab; b.classList.toggle('bg-surface', on); b.classList.toggle('shadow-sm', on); b.classList.toggle('text-ink', on); b.classList.toggle('text-muted', !on); }); drawList(); };
+        const setTab = v => { tab = v; history.replaceState(history.state, '', '/m/accounts' + (tab === 'ALL' ? '' : '?tab=' + tab)); el.querySelectorAll('[data-seg2="tab"] [data-v]').forEach(b => { const on = b.dataset.v === tab; b.classList.toggle('bg-surface', on); b.classList.toggle('shadow-sm', on); b.classList.toggle('text-ink', on); b.classList.toggle('text-muted', !on); }); drawList(); };
         ui.on(el, 'click', '[data-seg2="tab"] [data-v]', (e, b) => setTab(b.dataset.v));
         ui.on(el, 'click', '[data-tabjump]', (e, b) => setTab(b.dataset.tabjump));
         el.querySelector('[data-q]').addEventListener('input', e => { q = e.target.value; drawList(); });
@@ -330,7 +356,8 @@ HP.page('/m/accounts/:id', {
     title: 'Khata', mobile: true, perm: 'parties.manage',
     async render(el, params) {
         const d = await api.get(`/api/parties/${params.id}/ledger`);
-        const p = d.party, vendor = p.type === 'VENDOR';
+        if (d.party.type === 'VENDOR') return HP.router.navigate('/m/vendors/' + params.id, { replace: true }); // vendors have their own screen
+        const p = d.party, vendor = false;
         const w = balanceWords(p.type, d.balance);
         const party = { ...p, balance: d.balance };
         const entries = [...d.entries].reverse();
@@ -372,7 +399,7 @@ HP.page('/m/accounts/:id', {
 
 // ═════════════════════════ Stock ═════════════════════════
 HP.page('/m/stock', {
-    title: 'Stock', mobile: true, perm: ['inventory.add', 'inventory.edit'],
+    title: 'Godown Stock', mobile: true, perm: ['inventory.add', 'inventory.edit'],
     async render(el, params, query) {
         const all = (await api.get('/api/inventory/catalog')).filter(p => p.type !== 'SERVICE');
         const isOut = p => p.stock <= 0, isLow = p => !isOut(p) && p.reorderLevel > 0 && p.stock <= p.reorderLevel;
@@ -403,43 +430,212 @@ HP.page('/m/stock', {
     },
 });
 
-// ═════════════════════════ Vendor Reports ═════════════════════════
+// ═════════════════════════ Vendors (the people goods come from) ═════════════════════════
+// List with what is owed and the next payment date; each vendor's profile, goods received, payments, due dates, khata.
+function vendorReport(box, preset) {
+    ui.mount(box, html`${chips('period', PERIODS, preset)}<div class="mt-4" data-rbody>${ui.loading()}</div>`);
+    const body = box.querySelector('[data-rbody]');
+    api.get('/api/reports/vendors', { preset }).then(r => {
+        ui.mount(body, html`<div class="grid grid-cols-2 gap-3">${stat('Purchased', fmt.money(r.totals.purchased))}${stat('Paid', fmt.money(r.totals.paid), 'good')}</div>
+          ${card(html`<div class="flex items-center justify-between"><span class="text-sm text-muted">${t('You still owe vendors')}</span><span class="text-xl font-bold text-bad">${fmt.money(r.totals.payable)}</span></div>
+            ${r.totals.returned ? html`<div class="mt-1 text-xs text-muted">${t('Returned to vendors')}: ${fmt.money(r.totals.returned)}</div>` : ''}`, 'mt-3')}
+          <div class="eyebrow mb-2 mt-5">${t('Vendors')} (${r.vendors.length})</div>
+          ${r.vendors.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm">${r.vendors.map(v => html`
+            <a href="/m/vendors/${v.id}" data-link class="flex items-center gap-3 px-4 py-3">${avatar(v.name, 'bad')}
+              <span class="min-w-0 flex-1"><span class="block truncate font-medium">${v.name}</span>
+                <span class="block text-xs text-muted">${t('Bought')} ${fmt.money(v.purchased)}</span><span class="block text-xs text-muted">${t('Paid')} ${fmt.money(v.paid)}</span></span>${amountRow('VENDOR', v.balance)}</a>`)}</div>`
+            : empty('No vendor activity in this period.')}
+          <p class="mt-4 text-center text-xs text-muted">${r.range.fromDay === r.range.toDay ? fmt.date(r.range.fromDay) : `${fmt.date(r.range.fromDay)} – ${fmt.date(r.range.toDay)}`}</p>`);
+    }).catch(e => ui.mount(body, html`<div class="text-sm text-bad">${e.message}</div>`));
+}
+
 HP.page('/m/vendors', {
-    title: 'Vendor Reports', mobile: true, perm: 'reports.view',
+    title: 'Vendors', mobile: true, perm: 'parties.manage', // vendor list, dues; Report needs reports.view
     async render(el, params, query) {
-        let preset = PERIODS.some(p => p[0] === query.preset) ? query.preset : 'month';
-        const load = async () => {
-            ui.mount(el, html`${chips('period', PERIODS, preset)}<div class="mt-4" data-body>${ui.loading()}</div>`);
-            const body = el.querySelector('[data-body]');
-            try {
-                const r = await api.get('/api/reports/vendors', { preset });
-                ui.mount(body, html`<div class="grid grid-cols-2 gap-3">${stat('Purchased', fmt.money(r.totals.purchased))}${stat('Paid', fmt.money(r.totals.paid), 'good')}</div>
-                  ${card(html`<div class="flex items-center justify-between"><span class="text-sm text-muted">${t('You still owe vendors')}</span><span class="text-xl font-bold text-bad">${fmt.money(r.totals.payable)}</span></div>
-                    ${r.totals.returned ? html`<div class="mt-1 text-xs text-muted">${t('Returned to vendors')}: ${fmt.money(r.totals.returned)}</div>` : ''}`, 'mt-3')}
-                  <div class="eyebrow mb-2 mt-5">${t('Vendors')} (${r.vendors.length})</div>
-                  ${r.vendors.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm">${r.vendors.map(v => html`
-                    <a href="/m/accounts/${v.id}" data-link class="flex items-center gap-3 px-4 py-3">${avatar(v.name, 'bad')}
-                      <span class="min-w-0 flex-1"><span class="block truncate font-medium">${v.name}</span>
-                        <span class="block text-xs text-muted">${t('Bought')} ${fmt.money(v.purchased)}</span><span class="block text-xs text-muted">${t('Paid')} ${fmt.money(v.paid)}</span></span>${amountRow('VENDOR', v.balance)}</a>`)}</div>`
-                    : empty('No vendor activity in this period.')}
-                  <p class="mt-4 text-center text-xs text-muted">${r.range.fromDay === r.range.toDay ? fmt.date(r.range.fromDay) : `${fmt.date(r.range.fromDay)} – ${fmt.date(r.range.toDay)}`}</p>`);
-            } catch (e) { ui.mount(body, html`<div class="text-sm text-bad">${e.message}</div>`); }
+        let tab = query.tab === 'report' ? 'REPORT' : 'LIST', q = '', preset = 'month';
+        const [list, dues] = await Promise.all([api.get('/api/parties', { type: 'VENDOR' }), api.get('/api/khata/dues', { view: 'pending' })]);
+        if (HP.native && HP.native.syncAlarms) HP.native.syncAlarms(dues.rows, { complete: dues.complete !== false });
+        const next = {};
+        for (const d of dues.rows) if (!next[d.partyId]) next[d.partyId] = d; // rows come soonest first
+        const payable = list.filter(p => p.balance > 0).reduce((a, p) => a + p.balance, 0);
+        const late = dues.counts.vendorOverdue || 0;
+        const drawList = () => {
+            const s = q.toLowerCase();
+            const rows = list.filter(p => !s || p.name.toLowerCase().includes(s) || String(p.phone || '').includes(s))
+                .sort((a, b) => (next[a.id] ? next[a.id].dueDate : '9999') .localeCompare(next[b.id] ? next[b.id].dueDate : '9999') || b.balance - a.balance || a.name.localeCompare(b.name));
+            el.querySelector('[data-list]').innerHTML = String(rows.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm">${rows.slice(0, 300).map(p => {
+                const d = next[p.id];
+                return html`<a href="/m/vendors/${p.id}" data-link class="flex items-center gap-3 px-4 py-3">${avatar(p.name, 'bad')}
+                  <span class="min-w-0 flex-1"><span class="block truncate font-medium">${p.name}</span>
+                    ${d ? html`<span class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">${t('Pay')} ${fmt.money(d.amount)} ${dueBadge(d.daysLeft)}</span>` : html`<span class="block text-xs text-muted">${p.phone || '—'}</span>`}</span>${amountRow('VENDOR', p.balance)}</a>`;
+            })}</div>` : empty(list.length ? 'Nothing matches.' : 'No vendors yet. Add the people you buy goods from.'));
         };
-        ui.on(el, 'click', '[data-chips="period"] [data-v]', (e, b) => { preset = b.dataset.v; history.replaceState({}, '', '/m/vendors?preset=' + preset); load(); });
+        const draw = () => {
+            ui.mount(el, html`<div class="grid grid-cols-2 gap-3">${stat('To pay vendors', fmt.money(payable), 'bad')}${stat('Due in 7 days', fmt.money(dues.counts.vendorDueWeek || 0), late ? 'bad' : 'warn', late ? `${late} ${t('late')}` : '')}</div>
+              ${can('reports.view') ? html`<div class="mt-4">${seg2('tab', [['LIST', 'Vendors'], ['REPORT', 'Report']], tab)}</div>` : ''}
+              <div class="mt-3" data-tabbody></div>`);
+            const box = el.querySelector('[data-tabbody]');
+            if (tab === 'REPORT' && can('reports.view')) return vendorReport(box, preset);
+            ui.mount(box, html`<div class="flex gap-2"><input class="input h-11 flex-1" type="search" placeholder="${t('Search name or phone')}" data-q autocomplete="off" value="${q}">
+                <button type="button" class="btn btn-primary h-11" data-add aria-label="${t('New vendor')}">${icon('userPlus')}</button></div><div class="mt-3" data-list></div>`);
+            box.querySelector('[data-q]').addEventListener('input', e => { q = e.target.value; drawList(); });
+            drawList();
+        };
+        draw();
+        ui.on(el, 'click', '[data-seg2="tab"] [data-v]', (e, b) => { tab = b.dataset.v; history.replaceState(history.state, '', '/m/vendors' + (tab === 'REPORT' ? '?tab=report' : '')); draw(); });
+        ui.on(el, 'click', '[data-chips="period"] [data-v]', (e, b) => { preset = b.dataset.v; vendorReport(el.querySelector('[data-tabbody]'), preset); });
+        ui.on(el, 'click', '[data-add]', async () => { const p = await newParty('VENDOR'); if (p) go('/m/vendors/' + p.id); });
+    },
+});
+
+// one vendor: profile, what is owed, goods received, payments, payment dates, khata
+HP.page('/m/vendors/:id', {
+    title: 'Vendor', mobile: true, perm: 'parties.manage', // ledger, profile, dues; paying needs finance.manage
+    async render(el, params, query) {
+        const id = params.id;
+        let d, dues, live = [];
+        const load = async changed => {
+            [d, dues] = await Promise.all([api.get(`/api/parties/${id}/ledger`), api.get('/api/khata/dues', { view: 'pending', partyId: id })]);
+            if (HP.native && HP.native.refreshAlarms) HP.native.refreshAlarms(changed); // just changed: alarms at once
+        };
         await load();
+        if (d.party.type !== 'VENDOR') return HP.router.navigate('/m/accounts/' + id, { replace: true });
+        const lang = isUr() ? 'ur' : 'en';
+        const label = e => (HP.khata && HP.khata.typeLabel ? HP.khata.typeLabel(e.type, lang) : e.type);
+        let showAll = false;
+        const draw = () => {
+            const p = d.party, w = balanceWords('VENDOR', d.balance);
+            const entries = [...d.entries].reverse();
+            ui.mount(el, html`
+              <div class="rounded-2xl border border-line bg-surface p-4 shadow-sm">
+                <div class="flex items-start gap-3">${avatar(p.name, 'bad')}<div class="min-w-0 flex-1"><div class="truncate text-lg font-bold">${p.name}</div>
+                  <div class="text-xs text-muted">${[p.contactPerson, p.phone].filter(Boolean).join(' · ') || t('Vendor')}</div>${p.address || p.city ? html`<div class="text-xs text-muted">${[p.address, p.city].filter(Boolean).join(', ')}</div>` : ''}</div>
+                  <button type="button" class="btn-icon" data-act="edit" aria-label="${t('Edit profile')}">${icon('edit')}</button></div>
+                <div class="mt-4 rounded-xl ${w.tone === 'muted' ? 'bg-surface-2' : 'bg-' + w.tone + '-soft'} px-4 py-3"><div class="text-xs text-muted">${t(w.label)}</div><div class="text-2xl font-bold ${w.tone === 'muted' ? '' : 'text-' + w.tone}">${fmt.money(Math.abs(d.balance))}</div></div>
+                <div class="mt-4 grid ${COLS[2 + (can('finance.manage') ? 1 : 0) + (p.phone ? 1 : 0)]} gap-1">
+                  ${[['goods', 'Goods received', 'package', 'bad'], ...(can('finance.manage') ? [['pay', 'Payment', 'arrowUp', 'good']] : []), ['due', 'Pay-by date', 'calendar', 'warn'], ...(p.phone ? [['call', 'Call', 'smartphone', 'accent']] : [])].map(([k, l, ic, tone]) => html`<button type="button" class="flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-xs font-medium hover:bg-surface-2" data-act="${k}"><span class="flex h-10 w-10 items-center justify-center rounded-full ${TONE[tone]}">${icon(ic, 'w-5 h-5')}</span>${t(l)}</button>`)}</div></div>
+              <div class="eyebrow mb-2 mt-5">${t('Payments due')} (${dues.rows.length})</div>
+              ${dues.rows.length ? html`<div class="space-y-2">${dues.rows.map(x => html`<div class="rounded-2xl border border-line bg-surface p-3.5 shadow-sm">
+                  <div class="flex items-center justify-between gap-3"><div><div class="font-bold">${fmt.money(x.amount)}</div><div class="text-xs text-muted">${fmt.date(x.dueDate)}${x.note ? ' · ' + x.note : ''}</div></div>${dueBadge(x.daysLeft)}</div>
+                  <div class="mt-3 grid ${can('finance.manage') ? 'grid-cols-3' : 'grid-cols-2'} gap-2">${can('finance.manage') ? html`<button type="button" class="btn btn-primary h-9 justify-center" data-pay="${x.id}">${t('Pay')}</button>` : ''}
+                    <button type="button" class="btn btn-outline h-9 justify-center" data-due="${x.id}">${icon('calendar')}${t('Date')}</button>
+                    <button type="button" class="btn btn-outline h-9 justify-center text-bad" data-cancel="${x.id}">${icon('x')}${t('Remove')}</button></div></div>`)}</div>
+                <p class="mt-2 text-xs text-muted">${t('Payments clear these dates by themselves, oldest first.')}</p>`
+                : empty('No payment dates set. Use "Pay-by date" or set one when goods are received.')}
+              <div class="eyebrow mb-2 mt-5">${t('Khata entries')} (${entries.length})</div>
+              ${entries.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm">${(showAll ? entries : entries.slice(0, 60)).map(e => {
+                    const up = e.credit - e.debit, name = label(e), same = x => !x || x === name || x === e.type || /^(payment made|opening balance|goods received)$/i.test(x);
+                    return html`<div class="flex items-start gap-3 px-4 py-3"><div class="min-w-0 flex-1"><div class="font-medium">${name}${!same(e.refNo) ? html` <span class="text-xs text-muted">${e.refNo}</span>` : ''}</div>
+                        <div class="text-xs text-muted">${fmt.date(e.date)}${!same(e.note) && e.note !== e.refNo ? ' · ' + e.note : ''}</div>
+                        ${e.type === 'BILL' ? html`<button type="button" class="mt-1 text-xs text-bad" data-remove="${e.id}">${t('Remove (entered by mistake)')}</button>` : ''}</div>
+                      <div class="text-end"><div class="font-semibold ${up > 0 ? 'text-bad' : 'text-good'}">${up > 0 ? '+' : '−'}${fmt.money(Math.abs(up))}</div><div class="text-[11px] text-muted">${t('Bal')} ${fmt.money(e.balance)}</div></div></div>`;
+                })}</div>${!showAll && entries.length > 60 ? html`<button type="button" class="btn btn-outline mt-3 w-full justify-center" data-more>${t('Show all')} (${entries.length})</button>` : ''}` : empty('No entries yet.')}`);
+        };
+        const reload = async () => { await load(true); draw(); };
+        draw();
+
+        // goods received from this vendor: an amount-only khata entry, with an optional pay-by date (phone alarm)
+        const goods = () => ui.formDrawer({
+            title: t('Goods received'), subtitle: `${d.party.name} · مال آیا`, submit: t('Save'),
+            body: html`${ui.grid(
+                ui.field({ label: 'Bill amount', name: 'amount', money: true, required: true, attr: { inputmode: 'decimal', autofocus: true } }),
+                ui.field({ label: 'Date', name: 'date', type: 'date', value: today(), half: true, attr: { max: today() } }),
+                ui.field({ label: 'Bill no / note', name: 'note', half: true, placeholder: 'optional' }),
+                ui.field({ label: 'Pay by (reminder)', name: 'dueDate', type: 'date', value: plusDays(3), attr: { min: today() } }))}
+              <div class="mt-3">${dayChips('dueDate')}</div>
+              <p class="mt-4 rounded-xl bg-warn-soft px-3 py-2 text-xs text-warn">${t('Amount only: stock does not change. If this bill is also entered as a purchase on the shop computer, do not enter it here too.')}</p>`,
+            onMount: form => bindDayChips(form),
+            async onSubmit(v, dr) {
+                await api.post('/api/khata/entries', { kind: 'BILL', partyId: id, amount: v.amount, date: v.date, note: v.note, dueDate: v.dueDate || null });
+                dr.close(); ui.toast(t('Saved')); await reload();
+            },
+        });
+        // a payment to this vendor (cash / bank); open dues it covers are marked paid by themselves
+        const pay = async amount => {
+            if (!live.length) live = await liveAccounts();
+            ui.formDrawer({
+                title: t('Payment to vendor'), subtitle: `${d.party.name} · ${t('You pay')} ${fmt.money(Math.max(0, d.balance))}`, submit: t('Save payment'),
+                body: ui.grid(
+                    ui.field({ label: 'Amount', name: 'amount', money: true, required: true, value: amount || '', attr: { inputmode: 'decimal', autofocus: true } }),
+                    accountField(live, 'Paid from'),
+                    ui.field({ label: 'Date', name: 'date', type: 'date', value: today(), half: true, attr: { max: today() } }),
+                    ui.field({ label: 'Note', name: 'note', half: true, placeholder: 'optional' }),
+                    ui.field({ label: 'Print a slip', name: 'print', type: 'checkbox', value: false })),
+                async onSubmit(v, dr) {
+                    const acc = live.find(a => a.id === v.accountId);
+                    const method = acc ? methodFor(acc.type) : 'CASH';
+                    // the dues it covers are cleared by the server (oldest first) — never marked by hand, or one payment would count twice
+                    const r = await api.post('/api/finance/payments', { direction: 'OUT', partyId: id, amount: v.amount, method, accountId: v.accountId || null, date: v.date, note: v.note });
+                    dr.close(); ui.toast(`${fmt.money(v.amount)} ${t('paid')}`);
+                    await reload();
+                    if (v.print) printSlip({ title: 'PAYMENT MADE / ادائیگی', number: r.number, partyLabel: 'Paid to', partyName: d.party.name, amount: v.amount, method: METHOD_LABEL[method], balance: d.balance, balanceLabel: d.balance >= 0 ? 'Still to pay' : 'Advance', note: v.note });
+                },
+            });
+        };
+        const setDue = existing => {
+            // only what is not already scheduled (a second date for the same money would remind twice)
+            const left = Math.max(0, d.balance - dues.rows.reduce((a, x) => a + x.amount, 0));
+            if (!existing && dues.rows.length && !left) return ui.toast(t('The whole balance already has a pay-by date. Change that date instead.'), 'info');
+            return setDueForm(existing, left || Math.max(0, d.balance));
+        };
+        const setDueForm = (existing, suggest) => ui.formDrawer({
+            title: existing ? t('Change payment date') : t('Pay-by date'), subtitle: d.party.name, submit: t('Save'),
+            body: html`${ui.grid(
+                existing ? '' : ui.field({ label: 'Amount to pay', name: 'amount', money: true, required: true, value: suggest || '', attr: { inputmode: 'decimal' } }),
+                ui.field({ label: 'Pay by', name: 'dueDate', type: 'date', required: true, value: existing ? (existing.dueDate >= today() ? existing.dueDate : today()) : plusDays(3), attr: { min: today() } }),
+                existing ? '' : ui.field({ label: 'Note', name: 'note', placeholder: 'optional' }))}<div class="mt-3">${dayChips('dueDate')}</div>
+              <p class="help mt-3">${t('On that day the phone shows a reminder to pay this vendor.')}</p>`,
+            onMount: form => bindDayChips(form),
+            async onSubmit(v, dr) {
+                if (existing) await api.patch('/api/khata/dues/' + existing.id, { dueDate: v.dueDate });
+                else await api.post('/api/khata/dues', { partyId: id, amount: v.amount, dueDate: v.dueDate, note: v.note });
+                dr.close(); ui.toast(t('Saved')); await reload();
+            },
+        });
+        const edit = () => ui.formDrawer({
+            title: t('Edit profile'), subtitle: d.party.name, submit: t('Save'),
+            body: ui.grid(
+                ui.field({ label: 'Company / vendor name', name: 'name', required: true, value: d.party.name }),
+                ui.field({ label: 'Contact person', name: 'contactPerson', value: d.party.contactPerson || '', half: true }),
+                ui.field({ label: 'Mobile', name: 'phone', type: 'tel', value: d.party.phone || '', half: true, attr: { inputmode: 'tel' } }),
+                ui.field({ label: 'Address', name: 'address', value: d.party.address || '' }),
+                ui.field({ label: 'City', name: 'city', value: d.party.city || '', half: true }),
+                ui.field({ label: 'Notes', name: 'notes', value: d.party.notes || '', half: true, placeholder: 'e.g. supplies flour, sugar' })),
+            async onSubmit(v, dr) { await api.put('/api/parties/' + id, v); dr.close(); ui.toast(t('Saved')); await reload(); },
+        });
+
+        ui.on(el, 'click', '[data-more]', () => { showAll = true; draw(); });
+        ui.on(el, 'click', '[data-act]', (e, b) => {
+            const k = b.dataset.act;
+            if (k === 'goods') goods(); else if (k === 'pay') pay(Math.max(0, d.balance)); else if (k === 'due') setDue(); else if (k === 'edit') edit();
+            else if (k === 'call') window.open('tel:' + String(d.party.phone).replace(/[^\d+]/g, ''), '_blank');
+        });
+        ui.on(el, 'click', '[data-pay]', (e, b) => { const x = dues.rows.find(r => r.id === b.dataset.pay); pay(x.amount); });
+        ui.on(el, 'click', '[data-cancel]', async (e, b) => {
+            if (!(await ui.confirm({ title: t('Remove this pay-by date?'), message: t('Only the reminder is removed — the khata does not change. To record a payment, use "Pay".'), ok: t('Remove'), danger: true }))) return;
+            try { await api.patch('/api/khata/dues/' + b.dataset.cancel, { status: 'CANCELLED' }); await reload(); } catch (err) { ui.fail(err); }
+        });
+        ui.on(el, 'click', '[data-due]', (e, b) => setDue(dues.rows.find(r => r.id === b.dataset.due)));
+        ui.on(el, 'click', '[data-remove]', async (e, b) => {
+            if (!(await ui.confirm({ title: t('Remove this entry?'), message: t('Only for an entry made by mistake. Its payment date is cancelled too.'), ok: t('Remove'), danger: true }))) return;
+            try { await api.del('/api/khata/entries/' + b.dataset.remove); ui.toast(t('Removed')); await reload(); } catch (err) { ui.fail(err); }
+        });
+        if (query.pay && can('finance.manage')) { const x = dues.rows.find(r => r.id === query.pay); if (x) pay(x.amount); }
     },
 });
 
 // ═════════════════════════ Reminders ═════════════════════════
+// customers: promises due today / late / upcoming and everyone who owes; vendors: what to pay, by when
 HP.page('/m/reminders', {
-    title: 'Reminders', mobile: true, perm: ['parties.manage', 'finance.manage'],
+    title: 'Reminders', mobile: true, perm: 'parties.manage',
     async render(el, params, query) {
-        const VIEWS = [['today', 'Due today'], ['overdue', 'Late'], ['upcoming', 'Upcoming'], ['owing', 'All who owe']];
+        const VIEWS = [['today', 'Due today'], ['overdue', 'Late'], ['upcoming', 'Upcoming'], ['owing', 'All who owe'], ['vendors', 'Pay vendors']];
         let view = VIEWS.some(v => v[0] === query.view) ? query.view : 'today';
         const load = async () => {
             ui.mount(el, html`${chips('view', VIEWS, view)}<div class="mt-4" data-body>${ui.loading()}</div>`);
             const body = el.querySelector('[data-body]');
             try {
+                if (view === 'vendors') return await vendorsToPay(body);
                 let rows;
                 if (view === 'owing') {
                     const s = await api.get('/api/khata/summary');
@@ -448,11 +644,10 @@ HP.page('/m/reminders', {
                     const s = await api.get('/api/khata/promises', { view });
                     rows = s.rows.map(r => ({ party: { id: r.partyId, name: r.name, phone: r.phone, balance: r.balance }, promise: r, sub: `${t('Promised')} ${fmt.money(r.amount)} · ${fmt.date(r.promisedDate)}${r.remindCount ? ` · ${t('reminded')} ${r.remindCount}×` : ''}` }));
                 }
-                const when = pr => !pr ? '' : pr.daysLeft < 0 ? ui.badge(`${-pr.daysLeft} ${t('days late')}`, 'bad') : pr.daysLeft === 0 ? ui.badge(t('Today'), 'warn') : ui.badge(`${t('in')} ${pr.daysLeft} ${t('days')}`, 'accent');
                 ui.mount(body, rows.length ? html`<div class="space-y-3">${rows.map((r, i) => html`<div class="rounded-2xl border border-line bg-surface p-4 shadow-sm">
                     <a href="/m/accounts/${r.party.id}" data-link class="flex items-start gap-3">${avatar(r.party.name, 'warn')}
                       <span class="min-w-0 flex-1"><span class="block truncate font-semibold">${r.party.name}</span><span class="block text-xs text-muted">${r.sub}</span></span>
-                      <span class="text-end"><span class="block font-bold text-warn">${fmt.money(r.party.balance)}</span>${when(r.promise)}</span></a>
+                      <span class="text-end"><span class="block font-bold text-warn">${fmt.money(r.party.balance)}</span>${r.promise && r.promise.daysLeft !== undefined ? dueBadge(r.promise.daysLeft) : ''}</span></a>
                     <div class="mt-3 grid grid-cols-3 gap-2">
                       <button type="button" class="btn btn-primary h-10 justify-center" data-remind="${i}">${icon('bell')}${t('Remind')}</button>
                       <button type="button" class="btn btn-outline h-10 justify-center" data-promise="${i}">${icon('calendar')}${t('Promise')}</button>
@@ -463,7 +658,21 @@ HP.page('/m/reminders', {
                 ui.on(body, 'click', '[data-rec]', (e, b) => go('/m/receipt?party=' + rows[+b.dataset.rec].party.id));
             } catch (e) { ui.mount(body, html`<div class="text-sm text-bad">${e.message}</div>`); }
         };
-        ui.on(el, 'click', '[data-chips="view"] [data-v]', (e, b) => { view = b.dataset.v; history.replaceState({}, '', '/m/reminders?view=' + view); load(); });
+        // vendors to pay, soonest first
+        async function vendorsToPay(body) {
+            const s = await api.get('/api/khata/dues', { view: 'pending' });
+            if (HP.native && HP.native.syncAlarms) HP.native.syncAlarms(s.rows, { complete: s.complete !== false });
+            const total = s.rows.reduce((a, r) => a + r.amount, 0);
+            ui.mount(body, s.rows.length ? html`${card(html`<div class="flex items-center justify-between"><span class="text-sm text-muted">${t('To pay on the dates below')}</span><span class="text-lg font-bold text-bad">${fmt.money(total)}</span></div>`)}
+                <div class="mt-3 space-y-3">${s.rows.map(r => html`<div class="rounded-2xl border border-line bg-surface p-4 shadow-sm">
+                  <a href="/m/vendors/${r.partyId}" data-link class="flex items-start gap-3">${avatar(r.name, 'bad')}
+                    <span class="min-w-0 flex-1"><span class="block truncate font-semibold">${r.name}</span><span class="block text-xs text-muted">${fmt.date(r.dueDate)}${r.note ? ' · ' + r.note : ''}</span></span>
+                    <span class="text-end"><span class="block font-bold text-bad">${fmt.money(r.amount)}</span>${dueBadge(r.daysLeft)}</span></a>
+                  <div class="mt-3 grid grid-cols-2 gap-2"><a href="/m/vendors/${r.partyId}${can('finance.manage') ? '?pay=' + r.id : ''}" data-link class="btn btn-primary h-10 justify-center">${icon('arrowUp')}${t('Pay now')}</a>
+                    <a href="/m/vendors/${r.partyId}" data-link class="btn btn-outline h-10 justify-center">${t('Open vendor')}</a></div></div>`)}</div>`
+                : empty('No vendor payments are due. Set a pay-by date when goods are received.'));
+        }
+        ui.on(el, 'click', '[data-chips="view"] [data-v]', (e, b) => { view = b.dataset.v; history.replaceState(history.state, '', '/m/reminders?view=' + view); load(); });
         await load();
     },
 });
