@@ -829,6 +829,12 @@ Migrations run **before** the new code starts, so they must be compatible with t
 (and with desktop PCs that update later): add columns/tables freely; never rename or drop something old code or old PCs
 still use.
 
+> **Check (2026-11-23): the live Render service does not run migrations.** It was created by hand, and its build
+> command lacks `npm run db:deploy` (the blueprint's command has it). Until Render → hisabpro → Settings → *Build
+> Command* is set to `npm ci --include=dev && npm run build && npm run db:deploy && npm run seed`, apply every new
+> migration yourself **before pushing** ([§13.2](#132-supabase-database): `npx prisma migrate deploy` with the
+> production URLs), or the new code runs against the old database.
+
 ### 13.2 Supabase database
 
 - Project `wprrcbvrxeuvfptgwvkp`, Singapore. Dashboard → **Connect** → *ORMs*:
