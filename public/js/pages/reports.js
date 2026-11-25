@@ -734,3 +734,93 @@ HP.page('/reminders', {
         return killCharts;
     },
 });
+
+// ───────── Bill-Wise Profit ─────────
+// Every bill in the period with its sales, the cost of the goods and the profit; a bill opens its product-wise breakdown
+// (purchase price, selling price, quantity, profit per item). Returns are taken off the bill they belong to.
+HP.page('/reports/bill-profit', {
+    title: 'Bill-Wise Profit', perm: 'reports.view',
+    async render(el) {
+        let range = { preset: 'month' }, q = '', data = null, sort = { key: 'date', dir: -1 };
+        const load = async () => {
+            el.querySelector('[data-body]').innerHTML = String(ui.loading());
+            try { data = await api.get('/api/reports/bill-profit', { ...range, q }); drawBody(); }
+            catch (e) { el.querySelector('[data-body]').innerHTML = String(html`<div class="card card-pad text-sm text-bad">${e.message}</div>`); }
+        };
+        const rows = () => {
+            const list = [...data.bills];
+            const k = sort.key;
+            list.sort((a, b) => (k === 'date' ? (new Date(a.date) - new Date(b.date)) : k === 'number' ? a.number.localeCompare(b.number) : a[k] - b[k]) * sort.dir);
+            return list;
+        };
+        const th = (k, l, num) => html`<th class="${num ? '!text-right' : ''}"><button type="button" data-sort="${k}" class="inline-flex items-center gap-1 uppercase ${sort.key === k ? 'text-accent' : ''}">${t(l)}${sort.key === k ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}</button></th>`;
+        function drawBody() {
+            const T = data.totals, r = data.range;
+            const list = rows();
+            ui.mount(el.querySelector('[data-body]'), html`
+              <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                ${ui.statCard({ label: 'Bills', value: String(T.bills), iconName: 'receipt', tone: 'accent', sub: T.loss ? `${T.loss} ${t('sold at a loss')}` : '' })}
+                ${ui.statCard({ label: 'Total Sales Amount', value: M(T.sales), iconName: 'trending', tone: 'accent', sub: T.returned ? `${t('Returns')} ${M(T.returned)}` : '' })}
+                ${ui.statCard({ label: 'Total Purchase Cost', value: M(T.cost), iconName: 'bag', tone: 'warn' })}
+                ${ui.statCard({ label: 'Net Profit', value: M(T.profit), iconName: 'coins', tone: T.profit < 0 ? 'bad' : 'good', valueTone: T.profit < 0 ? 'bad' : 'good', sub: `${t('Margin')} ${fmt.pct(T.margin)}` })}
+              </div>
+              <div class="card mt-6 overflow-hidden">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3"><div class="text-sm text-muted">${r.fromDay === r.toDay ? fmt.date(r.fromDay) : `${fmt.date(r.fromDay)} – ${fmt.date(r.toDay)}`} · ${t('click a bill for its items')}</div>
+                  ${data.more ? html`<div class="text-xs text-warn">${t('Showing the latest 5,000 bills — choose a shorter period to see all.')}</div>` : ''}</div>
+                <div class="overflow-x-auto"><table class="tbl"><thead><tr>${th('number', 'Bill No')}${th('date', 'Date')}<th>${t('Customer')}</th>${th('sales', 'Sales Amount', true)}${th('cost', 'Purchase Cost', true)}${th('profit', 'Net Profit', true)}${th('margin', 'Margin', true)}</tr></thead>
+                  <tbody>${list.length ? list.slice(0, 1000).map(b => html`<tr class="cursor-pointer hover:bg-surface-2" data-bill="${b.id}">
+                      <td class="font-medium text-accent">${b.number}</td><td class="whitespace-nowrap">${fmt.dateTime(b.date)}</td>
+                      <td>${b.customerName}${b.mode === 'CREDIT' ? html` <span class="text-[11px] text-warn">${t('udhaar')}</span>` : ''}</td>
+                      <td class="num">${M(b.sales)}${b.returned ? html`<div class="text-[11px] text-muted">${t('returned')} ${M(b.returned)}</div>` : ''}</td>
+                      <td class="num">${M(b.cost)}</td><td class="num font-semibold ${b.profit < 0 ? 'text-bad' : 'text-good'}">${M(b.profit)}</td>
+                      <td class="num ${b.margin < 0 ? 'text-bad' : ''}">${fmt.pct(b.margin)}</td></tr>`)
+                    : html`<tr><td colspan="7" class="py-10 text-center text-sm text-muted">${t('No bills in this period.')}</td></tr>`}</tbody>
+                  ${list.length ? html`<tfoot><tr class="font-semibold"><td colspan="3">${t('Total')} (${list.length})</td><td class="num">${M(T.sales)}</td><td class="num">${M(T.cost)}</td><td class="num ${T.profit < 0 ? 'text-bad' : 'text-good'}">${M(T.profit)}</td><td class="num">${fmt.pct(T.margin)}</td></tr></tfoot>` : ''}</table></div>
+                ${list.length > 1000 ? html`<p class="px-5 py-3 text-xs text-muted">${t('The first 1,000 are listed; the CSV has all of them.')}</p>` : ''}</div>`);
+        }
+        // the bill's items: purchase price, selling price, quantity, profit
+        async function openBill(id) {
+            const d = ui.drawer({ title: t('Bill profit'), wide: true, body: ui.loading() });
+            try {
+                const r = await api.get('/api/reports/bill-profit/' + id);
+                const b = r.bill, T = r.totals;
+                ui.mount(d.body, html`
+                  <div class="flex flex-wrap items-start justify-between gap-3"><div><div class="text-xl font-bold">${b.number}</div><div class="text-sm text-muted">${fmt.dateTime(b.date)} · ${b.customerName}${b.cashierName ? ` · ${b.cashierName}` : ''}</div></div>
+                    <div class="text-end"><div class="text-xs text-muted">${t('Net Profit')}</div><div class="text-2xl font-bold ${T.profit < 0 ? 'text-bad' : 'text-good'}">${M(T.profit)}</div><div class="text-xs text-muted">${t('Margin')} ${fmt.pct(T.margin)}</div></div></div>
+                  <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div class="rounded-xl border border-line p-3"><div class="text-xs text-muted">${t('Bill amount')}</div><div class="font-semibold">${M(b.sales)}</div></div>
+                    <div class="rounded-xl border border-line p-3"><div class="text-xs text-muted">${t('Sales (without tax, after returns)')}</div><div class="font-semibold">${M(T.revenue)}</div></div>
+                    <div class="rounded-xl border border-line p-3"><div class="text-xs text-muted">${t('Purchase cost')}</div><div class="font-semibold">${M(T.cost)}</div></div>
+                    <div class="rounded-xl border border-line p-3"><div class="text-xs text-muted">${t('Discount')} / ${t('Tax')}</div><div class="font-semibold">${M(b.discount)} / ${M(b.tax)}</div></div></div>
+                  ${T.noCost ? html`<p class="mt-3 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">${T.noCost} ${t('item(s) have no purchase price set, so their whole sale shows as profit. Set the cost on the product.')}</p>` : ''}
+                  <div class="mt-4 overflow-x-auto rounded-xl border border-line"><table class="tbl"><thead><tr><th>${t('Product')}</th><th class="!text-right">${t('Qty')}</th><th class="!text-right">${t('Purchase price')}</th><th class="!text-right">${t('Selling price')}</th><th class="!text-right">${t('Profit')}</th></tr></thead>
+                    <tbody>${r.items.map(i => html`<tr><td><div class="font-medium">${i.name}</div>${i.returnedQty ? html`<div class="text-[11px] text-warn">${fmt.qty(i.returnedQty)} ${t('returned')}</div>` : ''}${i.noCost ? html`<div class="text-[11px] text-warn">${t('no purchase price')}</div>` : ''}</td>
+                        <td class="num whitespace-nowrap">${fmt.qty(i.netQty)} ${i.unit}</td><td class="num">${M(i.purchasePrice)}</td><td class="num">${M(i.sellingPrice)}${i.listPrice !== i.sellingPrice ? html`<div class="text-[11px] text-muted">${t('list')} ${M(i.listPrice)}</div>` : ''}</td>
+                        <td class="num"><div class="font-semibold ${i.profit < 0 ? 'text-bad' : 'text-good'}">${M(i.profit)}</div><div class="text-[11px] text-muted">${t('sales')} ${M(i.revenue)} · ${t('cost')} ${M(i.cost)}</div></td></tr>`)}</tbody>
+                    <tfoot><tr class="font-semibold"><td colspan="4">${t('Total')} — ${t('sales')} ${M(T.revenue)} · ${t('cost')} ${M(T.cost)}</td><td class="num ${T.profit < 0 ? 'text-bad' : 'text-good'}">${M(T.profit)}</td></tr></tfoot></table></div>
+                  <p class="mt-3 text-xs text-muted">${t('Selling price is what the customer actually paid per unit (after discounts, without tax). Purchase price is the cost when the bill was made.')}</p>`);
+            } catch (e) { ui.mount(d.body, html`<div class="text-sm text-bad">${e.message}</div>`); }
+        }
+        ui.mount(el, html`<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+              <div><h1 class="text-2xl font-bold tracking-tight">${t('Bill-Wise Profit')}</h1><p class="mt-1 text-sm text-muted">${t('Profit on every bill: sales, purchase cost and net profit — click a bill for its items.')}</p></div>
+              <div class="flex flex-wrap items-center gap-2">${ui.rangeButton(range)}<button class="btn btn-outline" data-csv>${icon('download')}CSV</button><button class="btn btn-outline" data-print>${icon('printer')}${t('Print')}</button></div></div>
+            <div class="mb-4 relative max-w-md"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span><input class="input ps-9" placeholder="${t('Search bill no or customer')}" data-q></div>
+            <div data-body></div>`);
+        let timer = null;
+        el.querySelector('[data-q]').addEventListener('input', e => { clearTimeout(timer); timer = setTimeout(() => { q = e.target.value.trim(); load(); }, 300); });
+        ui.on(el, 'click', '[data-range]', (e, b) => ui.rangePopover(b, range, r => { range = r; b.outerHTML = String(ui.rangeButton(range)); load(); }));
+        ui.on(el, 'click', '[data-sort]', (e, b) => { const k = b.dataset.sort; sort = { key: k, dir: sort.key === k ? -sort.dir : -1 }; drawBody(); });
+        ui.on(el, 'click', '[data-bill]', (e, row) => openBill(row.dataset.bill));
+        ui.on(el, 'click', '[data-csv]', () => data && ui.csv(`bill-wise-profit-${data.range.fromDay}-${data.range.toDay}.csv`, ['Bill No', 'Date', 'Customer', 'Sales Amount', 'Returned', 'Purchase Cost', 'Net Profit', 'Margin %'],
+            rows().map(b => [b.number, fmt.dateTime(b.date), b.customerName, R(b.sales), R(b.returned), R(b.cost), R(b.profit), b.margin])));
+        ui.on(el, 'click', '[data-print]', () => {
+            if (!data) return;
+            const T = data.totals;
+            HP.ui.print(html`<div class="receipt a4"><div style="font-size:18px;font-weight:700">${HP.session.tenant.name} — ${t('Bill-Wise Profit')}</div><div>${data.range.fromDay} – ${data.range.toDay}</div>
+              <table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:12px"><thead><tr style="background:#f1f5f9"><th style="text-align:left;padding:5px">Bill No</th><th style="text-align:left;padding:5px">Date</th><th style="text-align:left;padding:5px">Customer</th><th style="text-align:right;padding:5px">Sales</th><th style="text-align:right;padding:5px">Cost</th><th style="text-align:right;padding:5px">Profit</th></tr></thead>
+              <tbody>${rows().map(b => html`<tr style="border-bottom:1px solid #e5e7eb"><td style="padding:5px">${b.number}</td><td style="padding:5px">${fmt.date(b.date)}</td><td style="padding:5px">${b.customerName}</td><td style="padding:5px;text-align:right">${M(b.sales)}</td><td style="padding:5px;text-align:right">${M(b.cost)}</td><td style="padding:5px;text-align:right">${M(b.profit)}</td></tr>`)}</tbody>
+              <tfoot><tr style="font-weight:700"><td colspan="3" style="padding:5px">Total (${T.bills})</td><td style="padding:5px;text-align:right">${M(T.sales)}</td><td style="padding:5px;text-align:right">${M(T.cost)}</td><td style="padding:5px;text-align:right">${M(T.profit)}</td></tr></tfoot></table></div>`);
+        });
+        await load();
+    },
+});

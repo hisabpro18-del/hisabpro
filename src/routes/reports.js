@@ -4,6 +4,7 @@
 const express = require('express');
 const { prisma } = require('../db');
 const { N } = require('../lib/money');
+const { HttpError } = require('../lib/http');
 const { authenticate, can } = require('../auth');
 const dates = require('../lib/dates');
 const reports = require('../services/reports');
@@ -316,6 +317,75 @@ router.get('/reminders', VIEW, async (req, res) => {
         lowStock: low,
         expiring: exp.map(x => ({ ...x, tier: x.daysLeft < 0 ? 'expired' : x.daysLeft <= days ? 'urgent' : 'upcoming', valueRisk: x.value })),
         customers: recv.parties, suppliers: pay.parties,
+    });
+});
+
+// ── bill-wise profit: every bill in the period — what it sold, what those goods cost, and the profit ──
+// The same rules as Profit & Loss, but per bill: sales without tax, less this bill's returns (whenever they happened);
+// cost = the cost of the goods at the time of sale, less goods that came back to stock.
+const costOfLine = (cost, baseQty) => Calc.round(N(cost) * (Number(baseQty) || 0));
+async function returnsOf(t, saleIds) {
+    const by = new Map();
+    for (let i = 0; i < saleIds.length; i += 500) {
+        const rets = await prisma.saleReturn.findMany({ where: { tenantId: t, deletedAt: null, saleId: { in: saleIds.slice(i, i + 500) } }, select: { saleId: true, total: true, tax: true, items: { where: { deletedAt: null }, select: { cost: true, baseQty: true, restock: true } } } });
+        for (const r of rets) {
+            const o = by.get(r.saleId) || { revenue: 0, cost: 0 };
+            o.revenue += N(r.total) - N(r.tax);
+            for (const it of r.items) if (it.restock) o.cost += costOfLine(it.cost, it.baseQty);
+            by.set(r.saleId, o);
+        }
+    }
+    return by;
+}
+const pctOf = (part, whole) => (whole ? Math.round((part / whole) * 1000) / 10 : 0);
+router.get('/bill-profit', VIEW, async (req, res) => {
+    const t = req.user.tenantId;
+    const r = await reports.rangeFor(t, req.query);
+    const q = String(req.query.q || '').trim().toLowerCase().slice(0, 80);
+    let sales = await prisma.sale.findMany({ where: { tenantId: t, deletedAt: null, date: { gte: r.from, lt: r.to } }, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }], take: 5000,
+        select: { id: true, number: true, date: true, customerName: true, total: true, tax: true, costTotal: true, returnedTotal: true, itemsCount: true, status: true, mode: true } });
+    if (q) sales = sales.filter(s => s.number.toLowerCase().includes(q) || String(s.customerName || '').toLowerCase().includes(q));
+    const rets = await returnsOf(t, sales.map(s => s.id));
+    const bills = sales.map(s => {
+        const ret = rets.get(s.id) || { revenue: 0, cost: 0 };
+        const revenue = N(s.total) - N(s.tax) - ret.revenue, cost = N(s.costTotal) - ret.cost, profit = revenue - cost;
+        return { id: s.id, number: s.number, date: s.date, customerName: s.customerName, items: s.itemsCount, mode: s.mode, status: s.status,
+            sales: N(s.total), returned: N(s.returnedTotal), revenue, cost, profit, margin: pctOf(profit, revenue) };
+    });
+    const sum = k => bills.reduce((a, b) => a + b[k], 0);
+    const revenue = sum('revenue'), profit = sum('profit');
+    res.json({ range: rangeView(r), totals: { bills: bills.length, sales: sum('sales'), returned: sum('returned'), revenue, cost: sum('cost'), profit, margin: pctOf(profit, revenue), loss: bills.filter(b => b.profit < 0).length },
+        bills, more: sales.length === 5000 });
+});
+// one bill, product by product: quantity, purchase price, selling price, profit (returns taken off each line)
+router.get('/bill-profit/:id', VIEW, async (req, res) => {
+    const t = req.user.tenantId;
+    const s = await prisma.sale.findFirst({ where: { id: req.params.id, tenantId: t, deletedAt: null }, include: { items: { where: { deletedAt: null }, orderBy: { createdAt: 'asc' } } } });
+    if (!s) throw new HttpError(404, 'Bill not found.');
+    const back = new Map();
+    const retItems = s.items.length ? await prisma.saleReturnItem.findMany({ where: { tenantId: t, deletedAt: null, saleItemId: { in: s.items.map(i => i.id) }, ret: { is: { deletedAt: null } } } }) : [];
+    for (const ri of retItems) {
+        const o = back.get(ri.saleItemId) || { qty: 0, revenue: 0, cost: 0 };
+        o.qty += ri.qty; o.revenue += N(ri.total) - N(ri.tax); if (ri.restock) o.cost += costOfLine(ri.cost, ri.baseQty);
+        back.set(ri.saleItemId, o);
+    }
+    const items = s.items.map(i => {
+        const b = back.get(i.id) || { qty: 0, revenue: 0, cost: 0 };
+        const factor = Number(i.factor) || 1;
+        const lineRevenue = N(i.total) - N(i.tax), qty = Number(i.qty) || 0;
+        const revenue = lineRevenue - b.revenue, cost = costOfLine(i.cost, i.baseQty) - b.cost, profit = revenue - cost;
+        return {
+            id: i.id, name: i.variantLabel ? `${i.name} (${i.variantLabel})` : i.name, unit: i.unitName, qty, returnedQty: Calc.q3(b.qty), netQty: Calc.q3(qty - b.qty),
+            purchasePrice: Calc.round(N(i.cost) / factor), // per sale unit (cost is kept per base unit)
+            sellingPrice: qty ? Calc.round(lineRevenue / qty) : 0, // what was actually charged per unit, after discounts, without tax
+            listPrice: N(i.price), revenue, cost, profit, margin: pctOf(profit, revenue), noCost: !N(i.cost),
+        };
+    });
+    const sum = k => items.reduce((a, x) => a + x[k], 0);
+    const revenue = sum('revenue'), profit = sum('profit');
+    res.json({
+        bill: { id: s.id, number: s.number, date: s.date, customerName: s.customerName, cashierName: s.cashierName, mode: s.mode, status: s.status, sales: N(s.total), tax: N(s.tax), discount: N(s.discount), returned: N(s.returnedTotal) },
+        items, totals: { revenue, cost: sum('cost'), profit, margin: pctOf(profit, revenue), noCost: items.filter(x => x.noCost).length },
     });
 });
 

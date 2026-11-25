@@ -9,7 +9,7 @@ use the table of contents.
 > [§2.3](#23-accounts-and-who-owns-them)) and keep them in a password manager. Never commit a secret; `.env` and `render.env` are
 > git-ignored for that reason.
 
-_Last updated: 2026-11-23 · Windows app 1.0.1 · Android app 1.0.2 · 216 automated tests passing_
+_Last updated: 2026-11-23 · Windows app 1.0.1 · Android app 1.0.2 · 221 automated tests passing_
 
 ---
 
@@ -519,7 +519,7 @@ All paths start with the mount. Auth = signed-in user unless noted; the permissi
 | `/api/day-close` (dayclose.js) | `GET /preview` · `POST /` · `GET /` |
 | `/api/finance` (finance.js) | accounts (`GET/POST /accounts`, `PUT/DELETE /accounts/:id`, `GET /ledger`, `GET /accounts/:id/ledger`, `POST /transfers`) · `GET /parties` · payments (`GET/POST /payments`, `DELETE /payments/:id`) · cheques (`GET/POST /cheques`, `POST /cheques/:id/clear`, `DELETE /cheques/:id`) · expenses (`GET/POST /expense-categories`, `DELETE /expense-categories/:id`, `GET/POST /expenses`, `DELETE /expenses/:id`) · capital (`GET /capital`, `POST /capital/setup`, `POST /capital`, `DELETE /capital/:id`) · taxes (`GET/POST /taxes`, `PUT/DELETE /taxes/:id`) |
 | `/api/hrm` (hrm.js) | `GET /meta` · employees (`GET /employees`, `GET /employees/next-code`, `GET/PUT/DELETE /employees/:id`, `POST /employees`, `PUT /employees/:id/documents/:kind`) · shifts · attendance (+ `POST /attendance/bulk-present`) · leaves (+ approve / reject) · payroll (`GET /payroll`, `POST /payroll/generate`, `PUT/DELETE /payroll/:id`, `POST /payroll/:id/pay`, `POST /payroll/pay-all`) · `GET /accounts` · advances · recruitment (`GET /recruitment`, postings, candidates, `PATCH /candidates/:id/stage`, `GET /candidates/:id/resume`) · appraisals · disciplinary · assets (+ return) · `GET /dashboard` |
-| `/api/reports` (reports.js) | `GET /dashboard` · `/sales` · `/purchases` · `/inventory` · `/expenses` · `/financial` · `/tax` · `/profit-loss` · `/product-performance` · `/reminders` |
+| `/api/reports` (reports.js) | `GET /dashboard` · `/sales` · `/purchases` · `/inventory` · `/expenses` · `/financial` · `/tax` · `/profit-loss` · `/product-performance` · `/reminders` · `/bill-profit` (each bill: sales, purchase cost, net profit; returns off their bill) · `/bill-profit/:id` (one bill product by product) |
 | `/api/settings` (settings.js) | `GET /` · `GET /users` (read-only list + 7-day activity) · `PUT /:key` (company, receipt, numbering, localization, pos) |
 | `/api/backup` (backup.js) | `GET /storage` · `GET /download` (full JSON of the client's business data) · `POST /import` (merge only: new ids added, existing rows never overwritten) |
 | `/api/onboarding` (onboarding.js) | `GET /` (getting-started checklist state) |
@@ -640,7 +640,7 @@ checkbox, switch, date, `money: true` shows rupees but `readForm()` returns pais
 | Inventory | `/products`, `/categories`, `/brands`, `/inventory/units`, `/inventory/colors`, `/inventory/sizes`, `/inventory/barcodes` (inventory.js) |
 | Khata | `/khata`, `/khata/c/:id`, `/khata/reminders`, `/day-close` (khata.js) |
 | Parties | `/customers`, `/vendors` (parties.js) |
-| Reports | `/reports`, `/reports/profit-loss`, `/reports/product-performance`, `/reminders` (reports.js) |
+| Reports | `/reports`, `/reports/profit-loss`, `/reports/product-performance`, `/reports/bill-profit`, `/reminders` (reports.js) |
 | HRM | `/hrm/dashboard`, `/hrm/employees`, `/hrm/attendance`, `/hrm/leaves`, `/hrm/payroll`, `/hrm/recruitment`, `/hrm/performance` (hrm.js) |
 | Finance | `/payments`, `/finance/capital`, `/banks`, `/cheques`, `/expenses`, `/finance/taxes` (finance.js) |
 | Administration | `/users`, `/settings` (tabs: Company Profile, Receipt & POS, Localization, App update on Windows) (settings.js), `/administration/backups` (backups.js) |

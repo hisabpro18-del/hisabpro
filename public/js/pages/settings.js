@@ -7,7 +7,7 @@ const FONTS = ['Inter', 'Roboto', 'Georgia', 'Times New Roman'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TIMEZONES = (() => { try { return Intl.supportedValuesOf('timeZone'); } catch { return ['Asia/Karachi', 'Asia/Dubai', 'Asia/Riyadh', 'Europe/London', 'America/New_York']; } })();
 const LAYOUT = [
-    ['showLogo', 'Show Logo', ''], ['showTaxId', 'Show Tax ID (GST / NTN)', ''], ['showCustomer', 'Show Customer Info', ''], ['showMrp', 'Show MRP Column', ''],
+    ['showLogo', 'Show Logo', ''], ['showTaxId', 'Show Tax ID (GST / NTN)', ''], ['showCustomer', 'Show Customer Info', ''],
     ['showSavings', 'Show Savings', 'Total amount saved on bill'], ['amountInWords', 'Amount in Words', ''], ['showTerms', 'Terms & Conditions', ''], ['showQr', 'QR Code (Scan & Pay)', ''],
     ['showPrevBalance', 'Show Previous Balance / Ledger', 'Credit / udhar running balance on invoice'], ['showBank', 'Show Bank Details', 'Wire transfer instructions for B2B'],
     ['showCashier', 'Show Salesman / Cashier Name', ''], ['showSignature', 'Show Digital Signature Line', 'Space for physical stamp or signature'],
