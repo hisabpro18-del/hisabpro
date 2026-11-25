@@ -9,7 +9,7 @@ use the table of contents.
 > [§2.3](#23-accounts-and-who-owns-them)) and keep them in a password manager. Never commit a secret; `.env` and `render.env` are
 > git-ignored for that reason.
 
-_Last updated: 2026-11-23 · Windows app 1.0.1 · Android app 1.0.2 · 221 automated tests passing_
+_Last updated: 2026-11-25 · Windows app 1.0.2 · Android app 1.0.2 · 221 automated tests passing_
 
 ---
 
@@ -1048,6 +1048,7 @@ migration rather than editing an applied one.
 | 2026-11-22 | Stay on the free 500 MB database: daily clean-up of housekeeping rows, PC resync from a fresh copy, size caps, storage card |
 | 2026-11-22 | Windows app updates itself from GitHub releases (Settings → App update); v1.0.0 released |
 | 2026-11-23 | Android app prepared (online, Capacitor): Bluetooth printing as a picture (Urdu-safe), Android print, share sheet; back button closes dialogs first. Build not finalised yet |
+| 2026-11-25 | Bill-wise profit report; receipts print only the rate charged (no MRP column). Windows app 1.0.2 |
 | 2026-11-23 | Imports from spreadsheets with downloadable templates (products, categories, brands, customers with old udhaar, vendors) after a shop's product upload failed; Windows app 1.0.1 released (Settings → App update) |
 | 2026-11-23 | Shop feedback (Punjabi): top two buttons for customers (Payment = udhaar given, Receipt); Godown Stock + **Vendors** (profiles, goods received, payments, pay-by dates with a phone alarm); expenses moved to a small button. Two code reviews (20 fixes). App 1.0.2 |
 | 2026-11-23 | The phone app is the **owner's ledger app only**: Payment, Receipt, Reports, All Accounts, Stock, Vendor Reports + Reminders (owner's sketch). POS and everything else stay on the web and the Windows app |
