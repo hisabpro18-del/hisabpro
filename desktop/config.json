@@ -1,4 +1,7 @@
 {
-  "serverUrl": "https://hisabpro-2r1x.onrender.com",
+  "serverUrl": "https://hisabpro-1-jutf.onrender.com",
+  "replaces": [
+    "https://hisabpro-2r1x.onrender.com"
+  ],
   "offlineDays": 7
 }

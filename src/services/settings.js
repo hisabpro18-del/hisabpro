@@ -36,14 +36,30 @@ const KEYS = Object.keys(DEFAULTS);
 
 const parse = s => { try { return JSON.parse(s) || {}; } catch { return {}; } };
 
+// A client's settings rows are read once and remembered for TTL: nearly every request needs one setting (time zone,
+// currency) and each read is a trip to the database. Saving here, rows synced from a PC and a restore forget them at
+// once (forget); inside a transaction (db given) the rows are always read fresh.
+const TTL = 30000;
+const memo = new Map(); // tenantId → { at, promise of rows }
+function rowsOf(tenantId, db) {
+    if (db !== prisma) return db.setting.findMany({ where: { tenantId, deletedAt: null } });
+    const hit = memo.get(tenantId);
+    if (hit && Date.now() - hit.at < TTL) return hit.promise;
+    const promise = prisma.setting.findMany({ where: { tenantId, deletedAt: null } });
+    promise.catch(() => memo.delete(tenantId));
+    if (memo.size > 2000) memo.clear();
+    memo.set(tenantId, { at: Date.now(), promise });
+    return promise;
+}
+const forget = tenantId => (tenantId ? memo.delete(tenantId) : memo.clear());
+
 async function get(tenantId, key, db = prisma) {
-    const row = await db.setting.findUnique({ where: { id: `${tenantId}:${key}` } });
     // only this client's own, live row (the same rule as getAll)
-    const own = row && row.tenantId === tenantId && !row.deletedAt;
-    return { ...DEFAULTS[key], ...(own ? parse(row.value) : {}) };
+    const row = (await rowsOf(tenantId, db)).find(r => r.id === `${tenantId}:${key}`);
+    return { ...DEFAULTS[key], ...(row ? parse(row.value) : {}) };
 }
 async function getAll(tenantId, db = prisma) {
-    const rows = await db.setting.findMany({ where: { tenantId, deletedAt: null } });
+    const rows = await rowsOf(tenantId, db);
     const out = {};
     for (const k of KEYS) out[k] = { ...DEFAULTS[k], ...parse((rows.find(r => r.key === k) || {}).value) };
     return out;
@@ -60,7 +76,8 @@ async function put(tenantId, key, patch, db = prisma) {
     }
     const id = `${tenantId}:${key}`;
     await db.setting.upsert({ where: { id }, create: { id, tenantId, key, value: JSON.stringify(next) }, update: { tenantId, key, value: JSON.stringify(next), deletedAt: null } });
+    forget(tenantId);
     return next;
 }
 
-module.exports = { DEFAULTS, KEYS, get, getAll, put };
+module.exports = { DEFAULTS, KEYS, get, getAll, put, forget };

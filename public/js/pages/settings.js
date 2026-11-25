@@ -227,7 +227,7 @@ HP.page('/users', {
             options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { display: true, labels: { usePointStyle: true, boxWidth: 8 } } },
                 scales: { x: { grid: { display: false }, border: { display: false } }, y: { beginAtZero: true, grid: { color: ui.css('--color-line') }, border: { display: false, dash: [4, 4] }, ticks: { precision: 0, maxTicksLimit: 5 } } } },
         }));
-        ui.on(el, 'input', '[data-q]', (e, i) => { q = i.value.trim().toLowerCase(); el.querySelector('[data-rows]').innerHTML = String(rows()); });
+        ui.on(el, 'input', '[data-q]', (e, i) => { q = i.value.trim().toLowerCase(); const tb = el.querySelector('[data-rows]'); tb.innerHTML = String(rows()); ui.repage(tb); });
         return () => charts.forEach(c => { try { c && c.destroy(); } catch { } });
     },
 });

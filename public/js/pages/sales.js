@@ -16,6 +16,7 @@ HP.page('/sales', {
                 ${ui.statCard({ label: 'Total', value: s.count || 0, iconName: 'receipt', tone: 'gray' })}
                 ${ui.statCard({ label: 'Total Revenue', value: fmt.money(s.revenue), iconName: 'trending', tone: 'good', valueTone: 'good' })}
                 ${ui.statCard({ label: 'Due', value: fmt.money(s.due), iconName: 'banknote', tone: 'warn', valueTone: 'warn' })}</div>`);
+            el.querySelector('[data-capnote]').textContent = s.listed && s.count > s.listed ? `${t('Showing the newest')} ${s.listed.toLocaleString('en-US')} ${t('of')} ${s.count.toLocaleString('en-US')} — ${t('choose fewer dates or search to see the others.')}` : '';
             const th = (k, l, num) => html`<button class="inline-flex items-center gap-1 uppercase ${num ? 'justify-end w-full' : ''}" data-sort="${k}">${l}${icon(sort.key === k ? (sort.dir > 0 ? 'chevronUp' : 'chevronDown') : 'chevronDown', `w-3 h-3 ${sort.key === k ? 'text-ink' : 'text-faint'}`)}</button>`;
             ui.mount(el.querySelector('[data-list]'), ui.table({
                 rows, empty: { iconName: 'receipt', title: 'No sales in this period', text: 'Sales made on the POS appear here.' },
@@ -30,7 +31,7 @@ HP.page('/sales', {
                 ],
             }));
         };
-        const load = async () => { data = await api.get('/api/pos/sales', f); draw(); };
+        const load = async () => { data = await api.get('/api/pos/sales', { ...f, limit: 5000 }); draw(); };
         ui.mount(el, html`${ui.pageHeader({ title: t('Sales'), subtitle: 'Enterprise sales ledger — invoices, payments, and returns in real time.' })}
           <div data-stats class="mb-4"></div>
           <div class="card card-pad mb-4 flex flex-wrap items-end gap-3">
@@ -38,7 +39,7 @@ HP.page('/sales', {
             <div><select class="input w-44" data-f="status" aria-label="Filter by status"><option value="">All Statuses</option><option value="COMPLETED">Completed</option><option value="DUE">Pending / Due</option><option value="REFUNDED">Refunded</option></select>
               <div class="mt-2 flex items-center gap-2"><input type="date" class="input h-9" data-f="from" value="${f.from}" aria-label="From date"><span>–</span><input type="date" class="input h-9" data-f="to" value="${f.to}" aria-label="To date"></div></div>
             <div class="ms-auto flex gap-2"><button class="btn btn-outline" data-csv>${icon('download')}${t('Export CSV')}</button>${has('sales.create') ? html`<a href="/pos" data-link class="btn btn-primary">${icon('plus')}${t('New Sale')}</a>` : ''}</div>
-          </div><div data-list>${ui.loading()}</div>`);
+          </div><p class="mb-2 text-xs text-muted empty:hidden" data-capnote></p><div data-list>${ui.loading()}</div>`);
         let tm;
         ui.on(el, 'input', '[data-f]', (e, i) => { f[i.dataset.f] = i.value; clearTimeout(tm); tm = setTimeout(load, 250); });
         ui.on(el, 'click', '[data-sort]', (e, b) => { const k = b.dataset.sort; sort = { key: k, dir: sort.key === k ? -sort.dir : -1 }; draw(); });

@@ -23,6 +23,7 @@ process.env.MODE = 'desktop';
 process.env.DATABASE_URL = `file:${dbFile.replace(/\\/g, '/')}?connection_limit=1`;
 process.env.JWT_SECRET = fs.readFileSync(secretFile, 'utf8').trim();
 process.env.HP_SERVER_URL = process.env.HP_SERVER_URL || conf.serverUrl || '';
+process.env.HP_SERVER_REPLACES = (conf.replaces || []).join(' '); // old server addresses: activated PCs move to serverUrl
 process.env.DESKTOP_OFFLINE_DAYS = String(conf.offlineDays || 7);
 process.env.NODE_ENV = 'production';
 

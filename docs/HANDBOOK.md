@@ -9,7 +9,7 @@ use the table of contents.
 > [§2.3](#23-accounts-and-who-owns-them)) and keep them in a password manager. Never commit a secret; `.env` and `render.env` are
 > git-ignored for that reason.
 
-_Last updated: 2026-11-25 · Windows app 1.0.2 · Android app 1.0.2 · 221 automated tests passing_
+_Last updated: 2026-11-25 · Windows app 1.0.3 · Android app 1.0.3 · 224 automated tests passing_
 
 ---
 
@@ -52,7 +52,7 @@ The screen-by-screen specification copied from it is [reference/REFERENCE.md](..
 | | Web app | Windows desktop app | Android app (prepared, not built yet) |
 |---|---|---|---|
 | Who | Super admin, shop owners, managers, cashiers | The shop's counter PC | Shop owner's phone (owner only) |
-| Where it runs | Browser → `https://hisabpro-2r1x.onrender.com` | Installed `.exe`; the same app runs **inside the PC** with a local SQLite database | APK; the owner's ledger app: Payment, Receipt, Reports, All Accounts, Stock, Vendor Reports, Reminders (no POS) |
+| Where it runs | Browser → `https://hisabpro-1-jutf.onrender.com` | Installed `.exe`; the same app runs **inside the PC** with a local SQLite database | APK; the owner's ledger app: Payment, Receipt, Reports, All Accounts, Stock, Vendor Reports, Reminders (no POS) |
 | Internet | Needed | **Not needed for selling.** Syncs with the cloud whenever online | Needed |
 | Updates | Every push to `main` deploys | **Settings → App update** (one click; from GitHub releases) | Screens update with the web; new APK only for native changes (Settings → Phone app) |
 
@@ -100,11 +100,11 @@ User-facing guide for shops: [docs/USER-GUIDE.md](USER-GUIDE.md).
 
 | What | Link | Notes |
 |---|---|---|
-| **Live app** (web) | https://hisabpro-2r1x.onrender.com | Health check: `/healthz` → `{"ok":true,"mode":"cloud"}` |
+| **Live app** (web) | https://hisabpro-1-jutf.onrender.com | Health check: `/healthz` → `{"ok":true,"mode":"cloud"}` |
 | **Source code** | https://github.com/hisabpro18-del/hisabpro | **Public.** Branch `main` = production |
 | **Windows app releases** | https://github.com/hisabpro18-del/hisabpro/releases | Installed PCs update from here. Share the latest release link with new shops |
 | Latest installer | https://github.com/hisabpro18-del/hisabpro/releases/latest | `HisabPro-Setup-<version>.exe` (Windows releases are tagged `v…`; Android APKs will be tagged `android-v…`) |
-| **Render** (app hosting) | https://dashboard.render.com → service **hisabpro** | Web service, region **Singapore**, auto-deploys `main` |
+| **Render** (app hosting) | https://dashboard.render.com → project **hisabpro-sg** → web service (address `hisabpro-1-jutf.onrender.com`) | Web service, region **Singapore**, Starter, auto-deploys `main`. The first service (`hisabpro-2r1x`, created by hand) ran in **Oregon (US)**: every database query crossed the Pacific and screens took 4–15 s. Moved 2026-11-25; delete the old service once every phone and PC runs 1.0.3 |
 | **Supabase** (database) | https://supabase.com/dashboard/project/wprrcbvrxeuvfptgwvkp | Postgres, region **Singapore (ap-southeast-1)**, **free plan (500 MB)** |
 | Supabase (old, unused) | project `rnrdogvpzoowvykttqfq` (Tokyo) | Created first, never used for production. Safe to delete |
 | **Vercel** (DNS only) | https://vercel.com → team **hisabpro** | Only for the future custom domain's DNS. Vercel does **not** host the app |
@@ -824,7 +824,7 @@ test('things', async () => {
 1. Merge / push to `main`.
 2. Render builds automatically: `npm ci --include=dev` → `npm run build` (CSS, vendor, Prisma client) →
    `npm run db:deploy` (pending migrations) → `npm run seed` (super admin) → starts `npm start`.
-3. Watch Render → hisabpro → **Events / Logs**. Check `https://hisabpro-2r1x.onrender.com/healthz`.
+3. Watch Render → hisabpro → **Events / Logs**. Check `https://hisabpro-1-jutf.onrender.com/healthz`.
 
 Migrations run **before** the new code starts, so they must be compatible with the code still running for a minute
 (and with desktop PCs that update later): add columns/tables freely; never rename or drop something old code or old PCs
@@ -864,8 +864,9 @@ still use.
 2. In Vercel → team hisabpro → **Domains** (where the DNS is managed) add the CNAME / A records Render shows.
 3. Wait for Render's certificate, then put the new address in `desktop/config.json` and release an app update (new PCs
    are offered it). PCs already activated keep the address they were set up with — **keep the onrender.com address
-   working** (it stays valid as long as the Render service exists). There is no screen yet to change a PC's address;
-   the local API `POST /api/desktop/server` does it (a small Settings field would be a good addition).
+   working** (it stays valid as long as the Render service exists). To move activated PCs too, put the old address in
+   `replaces` in `desktop/config.json`: on start-up a PC still set to an address in that list switches to `serverUrl`
+   (its device token stays valid: same database and JWT_SECRET). This is how the Oregon → Singapore move was done in 1.0.3.
 
 ---
 
@@ -1049,6 +1050,7 @@ migration rather than editing an applied one.
 | 2026-11-22 | Windows app updates itself from GitHub releases (Settings → App update); v1.0.0 released |
 | 2026-11-23 | Android app prepared (online, Capacitor): Bluetooth printing as a picture (Urdu-safe), Android print, share sheet; back button closes dialogs first. Build not finalised yet |
 | 2026-11-25 | Bill-wise profit report; receipts print only the rate charged (no MRP column). Windows app 1.0.2 |
+| 2026-11-25 | A shop's khata history moved in from BizRocket Plus (khata entries only, no cash book; the import tool and shop data are kept outside this repo). Server moved to Singapore (next to the database). Pages on long tables, "Show more" on phone lists, search over all rows, statement periods, speed-ups (cached login check and settings, parallel queries, 30 s answer memory and prefetch in the app). Windows + Android 1.0.3 point to the new address; PCs activated on the old one move by themselves (`replaces` in `desktop/config.json`) |
 | 2026-11-23 | Imports from spreadsheets with downloadable templates (products, categories, brands, customers with old udhaar, vendors) after a shop's product upload failed; Windows app 1.0.1 released (Settings → App update) |
 | 2026-11-23 | Shop feedback (Punjabi): top two buttons for customers (Payment = udhaar given, Receipt); Godown Stock + **Vendors** (profiles, goods received, payments, pay-by dates with a phone alarm); expenses moved to a small button. Two code reviews (20 fixes). App 1.0.2 |
 | 2026-11-23 | The phone app is the **owner's ledger app only**: Payment, Receipt, Reports, All Accounts, Stock, Vendor Reports + Reminders (owner's sketch). POS and everything else stay on the web and the Windows app |

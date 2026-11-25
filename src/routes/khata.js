@@ -36,8 +36,8 @@ async function customer(t, id) {
 }
 
 // vendors to pay: due today / late / within 7 days (and how much) — after settling, so paid dues do not count
-async function dueCounts(t, today) {
-    await K.settleAllDues(t);
+async function dueCounts(t, today, settled = false) {
+    if (!settled) await K.settleAllDues(t);
     const dues = await prisma.vendorDue.findMany({ where: { tenantId: t, status: 'PENDING', deletedAt: null }, select: { dueDate: true, amount: true } });
     const week = dates.addDays(today, 7);
     return {
@@ -51,14 +51,21 @@ router.get('/summary', VIEW, async (req, res) => {
     const t = req.user.tenantId;
     const tz = await tzOf(t);
     const today = K.today(tz);
-    const parties = await prisma.party.findMany({ where: { tenantId: t, type: 'CUSTOMER', deletedAt: null }, orderBy: { name: 'asc' } });
-    const bal = await ledger.balances(t, { type: 'CUSTOMER' });
-    const lastPay = await prisma.ledgerEntry.groupBy({ by: ['partyId'], where: { tenantId: t, deletedAt: null, type: { in: ['PAYMENT_IN', 'CHEQUE'] }, credit: { gt: 0 } }, _max: { date: true } });
-    const lastSale = await prisma.ledgerEntry.groupBy({ by: ['partyId'], where: { tenantId: t, deletedAt: null, type: 'SALE' }, _max: { date: true } });
-    const promises = await prisma.paymentPromise.findMany({ where: { tenantId: t, status: 'PENDING', deletedAt: null }, orderBy: { promisedDate: 'asc' } });
     const dayRange = dates.range('today', { tz });
-    const collected = await prisma.ledgerEntry.aggregate({ where: { tenantId: t, deletedAt: null, type: { in: ['PAYMENT_IN', 'CHEQUE'] }, credit: { gt: 0 }, date: { gte: dayRange.from, lt: dayRange.to } }, _sum: { credit: true } });
-    const sentToday = await prisma.messageLog.count({ where: { tenantId: t, deletedAt: null, createdAt: { gte: dayRange.from, lt: dayRange.to } } });
+    const seesDues = ['parties.manage', 'finance.manage'].some(k => Perms.has(req.user, k));
+    // independent reads go together (each one is a trip to the database)
+    const [parties, sums, lastPay, lastSale, promises, collected, sentToday, dues] = await Promise.all([
+        prisma.party.findMany({ where: { tenantId: t, type: 'CUSTOMER', deletedAt: null }, orderBy: { name: 'asc' } }),
+        prisma.ledgerEntry.groupBy({ by: ['partyId'], where: { tenantId: t, deletedAt: null }, _sum: { debit: true, credit: true } }),
+        prisma.ledgerEntry.groupBy({ by: ['partyId'], where: { tenantId: t, deletedAt: null, type: { in: ['PAYMENT_IN', 'CHEQUE'] }, credit: { gt: 0 } }, _max: { date: true } }),
+        prisma.ledgerEntry.groupBy({ by: ['partyId'], where: { tenantId: t, deletedAt: null, type: 'SALE' }, _max: { date: true } }),
+        prisma.paymentPromise.findMany({ where: { tenantId: t, status: 'PENDING', deletedAt: null }, orderBy: { promisedDate: 'asc' } }),
+        prisma.ledgerEntry.aggregate({ where: { tenantId: t, deletedAt: null, type: { in: ['PAYMENT_IN', 'CHEQUE'] }, credit: { gt: 0 }, date: { gte: dayRange.from, lt: dayRange.to } }, _sum: { credit: true } }),
+        prisma.messageLog.count({ where: { tenantId: t, deletedAt: null, createdAt: { gte: dayRange.from, lt: dayRange.to } } }),
+        seesDues ? dueCounts(t, today) : {},
+    ]);
+    // a customer's balance = Σ(debit − credit) of their khata (the same rule as ledger.balances)
+    const bal = Object.fromEntries(sums.map(r => [r.partyId, N(r._sum.debit) - N(r._sum.credit)]));
     const rows = parties.map(p => {
         const pr = promises.find(x => x.partyId === p.id);
         const lp = (lastPay.find(x => x.partyId === p.id) || {})._max, ls = (lastSale.find(x => x.partyId === p.id) || {})._max;
@@ -78,7 +85,7 @@ router.get('/summary', VIEW, async (req, res) => {
             collectedToday: N(collected._sum.credit), messagesToday: sentToday,
             overLimit: owing.filter(r => r.creditLimit > 0 && r.balance > r.creditLimit).length,
             // what the shop owes vendors is for those who manage the khata or money, not for cashiers
-            ...(['parties.manage', 'finance.manage'].some(k => Perms.has(req.user, k)) ? await dueCounts(t, today) : {}),
+            ...dues,
         },
         rows,
     });
@@ -86,12 +93,13 @@ router.get('/summary', VIEW, async (req, res) => {
 
 router.get('/customers/:id', VIEW, async (req, res) => {
     const t = req.user.tenantId;
-    const p = await customer(t, req.params.id);
-    const tz = await tzOf(t);
+    const [p, tz] = await Promise.all([customer(t, req.params.id), tzOf(t)]);
     await K.settlePromises(t, p.id);
-    const entries = await ledger.statement(t, p);
-    const promises = await prisma.paymentPromise.findMany({ where: { tenantId: t, partyId: p.id, deletedAt: null }, orderBy: { createdAt: 'desc' }, take: 50 });
-    const messages = await prisma.messageLog.findMany({ where: { tenantId: t, partyId: p.id, deletedAt: null }, orderBy: { createdAt: 'desc' }, take: 50 });
+    const [entries, promises, messages] = await Promise.all([
+        ledger.statement(t, p),
+        prisma.paymentPromise.findMany({ where: { tenantId: t, partyId: p.id, deletedAt: null }, orderBy: { createdAt: 'desc' }, take: 50 }),
+        prisma.messageLog.findMany({ where: { tenantId: t, partyId: p.id, deletedAt: null }, orderBy: { createdAt: 'desc' }, take: 50 }),
+    ]);
     const today = K.today(tz);
     res.json({
         party: { id: p.id, name: p.name, phone: p.phone, address: p.address, city: p.city, group: p.group, creditLimit: N(p.creditLimit), notes: p.notes, createdAt: p.createdAt },
@@ -377,9 +385,14 @@ router.get('/dues', LEDGER, async (req, res) => {
     }
     const take = view === 'pending' ? 10000 : 500; // the phone schedules alarms from the whole pending list
     const list = await prisma.vendorDue.findMany({ where, orderBy: [{ dueDate: view === 'paid' ? 'desc' : 'asc' }, { createdAt: 'asc' }], take });
-    const parties = Object.fromEntries((await prisma.party.findMany({ where: { tenantId: t, id: { in: [...new Set(list.map(d => d.partyId))] } } })).map(p => [p.id, p]));
-    const bal = Object.keys(parties).length ? await ledger.balances(t, { partyIds: Object.keys(parties), type: 'VENDOR' }) : {};
-    res.json({ today, rows: list.map(d => dueView(d, parties[d.partyId], bal[d.partyId] || 0, today)), complete: list.length < take, counts: await dueCounts(t, today) });
+    const ids = [...new Set(list.map(d => d.partyId))];
+    const [partyRows, bal, counts] = await Promise.all([
+        prisma.party.findMany({ where: { tenantId: t, id: { in: ids } } }),
+        ids.length ? ledger.balances(t, { partyIds: ids, type: 'VENDOR' }) : {},
+        dueCounts(t, today, true), // settled just above
+    ]);
+    const parties = Object.fromEntries(partyRows.map(p => [p.id, p]));
+    res.json({ today, rows: list.map(d => dueView(d, parties[d.partyId], bal[d.partyId] || 0, today)), complete: list.length < take, counts });
 });
 router.post('/dues', LEDGER, async (req, res) => {
     const t = req.user.tenantId;

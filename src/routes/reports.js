@@ -45,9 +45,8 @@ router.get('/dashboard', VIEW, async (req, res) => {
     ]);
     const fig = (x, pu) => ({ salesTotal: x.salesTotal, netSales: x.salesTotal - x.returnsTotal, salesCount: x.salesCount, volume: x.salesTotal, returnsTotal: x.returnsTotal, netProfit: x.netProfit, purchases: pu.total, expenses: x.expenses, grossProfit: x.grossProfit, revenue: x.revenue });
     const period = fig(pl, pur), previous = fig(plPrev, purPrev);
-    const low = await reports.lowStock(t, { valuation });
     const reminderDays = Number(r.loc.expiryReminderDays) || 30;
-    const exp = await reports.expiring(t, { withinDays: reminderDays, valuation });
+    const [low, exp, cashflow] = await Promise.all([reports.lowStock(t, { valuation }), reports.expiring(t, { withinDays: reminderDays, valuation }), cashflowRows(t, txns)]);
     res.json({
         range: rangeView(r),
         period, previous,
@@ -55,7 +54,7 @@ router.get('/dashboard', VIEW, async (req, res) => {
         live: { receivable: recv.total, payable: pay.total, cashBank: cash.total },
         trend: series.map(d => ({ day: d.day, revenue: d.revenue, netProfit: d.netProfit })),
         categories: reports.byCategory(sold).filter(c => c.revenue > 0).map(c => ({ name: c.name, revenue: c.revenue })),
-        cashflow: await cashflowRows(t, txns),
+        cashflow,
         lowStock: low.slice(0, 10).map(x => ({ id: x.id, name: x.name, stock: x.stock, unit: x.unit, reorderLevel: x.reorderLevel, status: x.status })),
         lowStockCount: low.length,
         health: [
@@ -207,15 +206,15 @@ router.get('/expenses', VIEW, async (req, res) => {
 router.get('/financial', VIEW, async (req, res) => {
     const t = req.user.tenantId;
     const r = await reports.rangeFor(t, req.query);
-    const [txns, recv, pay, pl, valuation, cash, capital, customers, ledgerSums] = await Promise.all([
+    const [txns, recv, pay, pl, valuation, cash, capital, customers, ledgerSums, pos] = await Promise.all([
         prisma.accountTxn.groupBy({ by: ['type'], where: { tenantId: t, deletedAt: null, date: within(r), type: { notIn: NOT_CASHFLOW } }, _sum: { amount: true } }),
         reports.receivables(t), reports.payables(t), reports.profitAndLoss(t, r), reports.stockValuation(t), reports.cashAndBank(t),
         prisma.capitalTxn.groupBy({ by: ['type'], where: { tenantId: t, deletedAt: null }, _sum: { amount: true } }),
         prisma.party.findMany({ where: { tenantId: t, type: 'CUSTOMER', deletedAt: null }, select: { id: true, name: true, phone: true } }),
         prisma.ledgerEntry.groupBy({ by: ['partyId'], where: { tenantId: t, deletedAt: null }, _sum: { debit: true, credit: true }, _max: { date: true } }),
+        // money in / out by kind (positive and negative sums are kept apart: a type can hold both, e.g. cheques)
+        prisma.accountTxn.groupBy({ by: ['type'], where: { tenantId: t, deletedAt: null, date: within(r), type: { notIn: NOT_CASHFLOW }, amount: { gt: 0 } }, _sum: { amount: true } }),
     ]);
-    // money in / out by kind (positive and negative sums are kept apart: a type can hold both, e.g. cheques)
-    const pos = await prisma.accountTxn.groupBy({ by: ['type'], where: { tenantId: t, deletedAt: null, date: within(r), type: { notIn: NOT_CASHFLOW }, amount: { gt: 0 } }, _sum: { amount: true } });
     const byType = txns.map(x => { const plus = N((pos.find(p => p.type === x.type) || { _sum: {} })._sum.amount); const net = N(x._sum.amount); return { type: x.type, label: TXN_LABEL[x.type] || x.type, in: plus, out: plus - net }; })
         .sort((a, b) => (b.in + b.out) - (a.in + a.out));
     const moneyIn = sumBy(byType, 'in'), moneyOut = sumBy(byType, 'out');

@@ -4,7 +4,7 @@ const bcrypt = require('bcryptjs');
 const config = require('../config');
 const { prisma } = require('../db');
 const { HttpError, str } = require('../lib/http');
-const { signToken, authenticate } = require('../auth');
+const { signToken, authenticate, forgetUser } = require('../auth');
 const { audit } = require('../audit');
 const settings = require('../services/settings');
 const Perms = require('../../public/js/shared/permissions');
@@ -80,6 +80,7 @@ router.post('/password', authenticate, async (req, res) => {
     const pw = checkNewPassword(req.body?.password, user.email);
     if (await bcrypt.compare(pw, user.passwordHash)) throw new HttpError(400, 'Choose a password different from the current one.');
     const upd = await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await bcrypt.hash(pw, 10), mustChangePassword: false, tokenVersion: { increment: 1 } } });
+    forgetUser(user.id);
     await audit(req, { action: 'auth.password_change', summary: 'Changed own password (signed out everywhere else)' });
     res.json({ token: signToken(upd) });
 });

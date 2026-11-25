@@ -2200,5 +2200,22 @@ window.HP_UR = {
   "Profit on every bill: sales, purchase cost and net profit — click a bill for its items.": "ہر بل کا منافع: فروخت، قیمتِ خرید اور خالص منافع — آئٹمز کے لیے بل پر کلک کریں۔",
   "Search bill no or customer": "بل نمبر یا گاہک تلاش کریں",
   "Total Sales Amount": "کل فروخت",
-  "Total Purchase Cost": "کل قیمتِ خرید"
+  "Total Purchase Cost": "کل قیمتِ خرید",
+  "Statement period": "اسٹیٹمنٹ کی مدت",
+  "Which entries should the statement show? It starts with the balance before that period.": "اسٹیٹمنٹ میں کون سی انٹریاں ہوں؟ یہ اس مدت سے پہلے کے بقایا سے شروع ہوگی۔",
+  "Last 1 month": "پچھلا 1 مہینہ",
+  "Last 3 months": "پچھلے 3 مہینے",
+  "Last 6 months": "پچھلے 6 مہینے",
+  "Last 1 year": "پچھلا 1 سال",
+  "Whole khata": "مکمل کھاتہ",
+  "entries": "انٹریاں",
+  "of": "میں سے",
+  "Previous": "پچھلا",
+  "Page": "صفحہ",
+  "Show more": "مزید دکھائیں",
+  "Search entries: remark, amount or date": "انٹری تلاش کریں: تفصیل، رقم یا تاریخ",
+  "Showing the newest 2,000 transactions — search to find older ones.": "تازہ ترین 2,000 لین دین دکھائے جا رہے ہیں — پرانے ڈھونڈنے کے لیے تلاش کریں۔",
+  "Newest 2,000 — search to find older ones": "تازہ ترین 2,000 — پرانے ڈھونڈنے کے لیے تلاش کریں",
+  "Showing the newest": "تازہ ترین دکھائے جا رہے ہیں",
+  "choose fewer dates or search to see the others.": "باقی دیکھنے کے لیے کم تاریخیں چنیں یا تلاش کریں۔"
 };

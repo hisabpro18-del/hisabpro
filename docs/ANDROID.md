@@ -45,7 +45,7 @@ It needs internet. Offline selling stays with the Windows app at the counter.
 ## 1. How it works
 
 ```
- Android phone ── HisabPro app (Capacitor 8 WebView) ──HTTPS──► https://hisabpro-2r1x.onrender.com (same web app)
+ Android phone ── HisabPro app (Capacitor 8 WebView) ──HTTPS──► https://hisabpro-1-jutf.onrender.com (same web app)
                     │  user agent ends with "HisabProApp/1.0"
                     │  window.Capacitor injected by the app
                     ├─ HpNative (our plugin, Java)     Bluetooth ESC/POS printing · Android print dialog · share files
@@ -262,7 +262,7 @@ Store → *Install anyway*. Then sign in with the user's usual HisabPro email an
 | Receipt too faint | Raise the printer's density (its own settings); the picture is pure black and white |
 | Scanner closes at once | Camera permission denied → Android Settings → Apps → HisabPro → Permissions → Camera |
 | Blank / old-looking pages | Update *Android System WebView* and *Chrome* from the Play Store |
-| Shows "No internet connection" | No connection or the server is down; check `https://hisabpro-2r1x.onrender.com/healthz` |
+| Shows "No internet connection" | No connection or the server is down; check `https://hisabpro-1-jutf.onrender.com/healthz` |
 
 ---
 

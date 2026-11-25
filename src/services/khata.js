@@ -85,7 +85,10 @@ async function settleDues(tenantId, partyId, db = prisma) {
 // settle every vendor that has open dues (before listing or counting them)
 async function settleAllDues(tenantId, db = prisma) {
     const open = await db.vendorDue.findMany({ where: { tenantId, status: 'PENDING', deletedAt: null }, select: { partyId: true } });
-    for (const pid of [...new Set(open.map(d => d.partyId))]) await settleDues(tenantId, pid, db);
+    // vendors are independent of each other; inside a transaction (one connection) they go one by one
+    const ids = [...new Set(open.map(d => d.partyId))];
+    if (db === prisma) await Promise.all(ids.map(pid => settleDues(tenantId, pid, db)));
+    else for (const pid of ids) await settleDues(tenantId, pid, db);
 }
 
 async function receive(tx, { tenantId, party, amount, method = 'CASH', accountId = null, note = '', userId = null, date = new Date() }) {

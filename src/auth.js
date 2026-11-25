@@ -28,6 +28,27 @@ const READ_ONLY_ALLOWED = [/^\/api\/auth\/(logout|password)$/];
 let desktopGuard = null;
 const setDesktopGuard = fn => { desktopGuard = fn; };
 
+// ── who is asking: the user and the client of a token, read together and remembered for AUTH_TTL ──
+// Requests that arrive together share one pair of reads (the promise is kept, not only the result).
+const AUTH_TTL = 10000;
+const seen = new Map(); // `${userId}|${tenantId}` → { at, promise }
+function whoIs(p) {
+    const key = `${p.id}|${p.tid || ''}`;
+    const hit = seen.get(key);
+    if (hit && Date.now() - hit.at < AUTH_TTL) return hit.promise;
+    const promise = Promise.all([
+        prisma.user.findUnique({ where: { id: p.id } }),
+        p.tid ? prisma.tenant.findUnique({ where: { id: p.tid } }) : null,
+    ]).then(([user, tenant]) => ({ user, tenant }));
+    promise.catch(() => seen.delete(key));
+    if (seen.size > 5000) seen.clear();
+    seen.set(key, { at: Date.now(), promise });
+    return promise;
+}
+// a user or client changed (password, access, removed): the next request reads them again
+const forgetUser = id => { for (const k of seen.keys()) if (k.startsWith(id + '|')) seen.delete(k); };
+const forgetTenant = id => { for (const k of seen.keys()) if (k.endsWith('|' + id)) seen.delete(k); };
+
 async function authenticate(req, res, next) {
     const header = req.headers.authorization || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -35,8 +56,11 @@ async function authenticate(req, res, next) {
     let p;
     try { p = jwt.verify(token, secret()); } catch { return next(new HttpError(401, 'Your session has ended. Please sign in again.')); }
 
-    const user = await prisma.user.findUnique({ where: { id: p.id } });
-    if (!user || !user.active || user.deletedAt || user.tokenVersion !== (p.tv || 0)) return next(new HttpError(401, 'Your session has ended. Please sign in again.'));
+    // user and client are read together (the token names both), and remembered for a few seconds: a screen asks for several
+    // things at once, and each would otherwise wait for its own two database reads. A changed password or a removed user
+    // still ends the session at once on this server (forgetUser), and within AUTH_TTL anywhere else.
+    const { user, tenant: tokenTenant } = await whoIs(p);
+    if (!user || !user.active || user.deletedAt || user.tokenVersion !== (p.tv || 0)) { forgetUser(p.id); return next(new HttpError(401, 'Your session has ended. Please sign in again.')); }
 
     if (p.imp) {
         // only the super admin can hold a workspace token
@@ -47,7 +71,7 @@ async function authenticate(req, res, next) {
     }
 
     if (req.user.tenantId) {
-        const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId } });
+        const tenant = tokenTenant && tokenTenant.id === req.user.tenantId ? tokenTenant : await prisma.tenant.findUnique({ where: { id: req.user.tenantId } });
         if (!tenant || tenant.deletedAt) return next(new HttpError(401, 'Your account was not found.'));
         req.tenant = tenant;
         const m = p.imp ? { mode: 'FULL' } : Access.mode(tenant);
@@ -74,4 +98,4 @@ const can = (...keys) => (req, res, next) => {
     next(new HttpError(403, 'You do not have permission for this. Ask the shop owner or HisabPro to change your access.'));
 };
 
-module.exports = { signToken, signWorkspaceToken, authenticate, requireSuper, requireTenant, can, setDesktopGuard };
+module.exports = { signToken, signWorkspaceToken, authenticate, requireSuper, requireTenant, can, setDesktopGuard, forgetUser, forgetTenant };

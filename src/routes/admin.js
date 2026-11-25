@@ -4,7 +4,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { prisma, withTx, ci } = require('../db');
 const { HttpError, str, need, isEmail, oneOf, bool } = require('../lib/http');
-const { authenticate, requireSuper, signWorkspaceToken } = require('../auth');
+const { authenticate, requireSuper, signWorkspaceToken, forgetUser, forgetTenant } = require('../auth');
 const { audit } = require('../audit');
 const { checkNewPassword } = require('./auth');
 const { seedTenant } = require('../services/tenant');
@@ -121,6 +121,7 @@ router.put('/clients/:id', async (req, res) => {
         if (data.active && Access.access(t).status === 'EXPIRED') throw new HttpError(400, 'The access period is over: renew it to switch the client back on.');
     }
     const upd = await prisma.tenant.update({ where: { id: t.id }, data });
+    forgetTenant(t.id);
     if (data.name && data.name !== t.name) {
         const company = await settings.get(t.id, 'company');
         if (!company.name || company.name === t.name) await settings.put(t.id, 'company', { name: data.name });
@@ -147,6 +148,7 @@ router.post('/clients/:id/access', async (req, res) => {
     }
     if (!t.active && t.inactiveReason === 'EXPIRED') { data.active = true; data.inactiveReason = null; }
     const upd = await prisma.tenant.update({ where: { id: t.id }, data });
+    forgetTenant(t.id);
     await audit(req, { tenantId: t.id, action: 'admin.client_access', summary: `Access of "${t.name}": ${accessText(t)} → ${accessText(upd)}` });
     res.json({ ...upd, access: Access.access(upd) });
 });
@@ -201,6 +203,7 @@ router.patch('/clients/:id/users/:uid', async (req, res) => {
     if (data.active === true && !u.active) await limits.assertRoom(t.id, 'users');
     if (data.email || data.active === false || (data.role && data.role !== u.role) || data.permissions) data.tokenVersion = { increment: 1 };
     const upd = await prisma.user.update({ where: { id: u.id }, data });
+    forgetUser(u.id);
     const what = [data.name && data.name !== u.name && 'name', data.email && `login ${u.email} → ${data.email}`, data.role && data.role !== u.role && `role → ${Perms.ROLE_LABEL[data.role]}`,
         data.permissions && 'permissions changed', data.active === false && u.active && 'switched off', data.active === true && !u.active && 'switched on'].filter(Boolean);
     if (what.length) await audit(req, { tenantId: t.id, action: 'user.update', summary: `User ${u.email}: ${what.join(', ')}` });
@@ -212,6 +215,7 @@ router.post('/clients/:id/users/:uid/reset-password', async (req, res) => {
     const u = await findUser(t.id, req.params.uid);
     const pw = checkNewPassword(req.body?.password, u.email);
     const upd = await prisma.user.update({ where: { id: u.id }, data: { passwordHash: await bcrypt.hash(pw, 10), mustChangePassword: true, tokenVersion: { increment: 1 }, failedLogins: 0, lockedUntil: null } });
+    forgetUser(u.id);
     await audit(req, { tenantId: t.id, action: 'user.password_reset', summary: `Password reset for ${u.email} (must change at next sign-in; unlocked)` });
     res.json(userView(upd));
 });

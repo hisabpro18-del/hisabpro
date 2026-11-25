@@ -55,14 +55,17 @@ function companyName() { const c = (HP.session.settings && HP.session.settings.c
 HP.page('/payments', {
     title: 'Payments In/Out', perm: 'finance.manage',
     async render(el, params, query) {
-        let list = [], q = '';
+        // the list is the newest CAP payments; the totals count all of them, and a search of a full list asks the server
+        const CAP = 2000;
+        let list = [], q = '', found = null, totals = null;
         const st = { key: 'date', dir: 'desc' };
         const draw = () => {
             const sum = d => list.filter(p => p.direction === d).reduce((s, p) => s + p.amount, 0);
-            const inn = sum('IN'), out = sum('OUT');
+            const inn = totals ? totals.in : sum('IN'), out = totals ? totals.out : sum('OUT');
             ui.mount(el.querySelector('[data-kpis]'), html`${kpi({ label: t('Payment In'), value: fmt.money(inn), iconName: 'arrowDown', tone: 'good', valueTone: 'good' })}${kpi({ label: t('Payment Out'), value: fmt.money(out), iconName: 'arrowUp', tone: 'bad', valueTone: 'bad' })}${kpi({ label: 'Net Flow', value: fmt.money(inn - out), iconName: 'wallet', tone: 'accent', valueTone: inn - out < 0 ? 'bad' : '' })}`);
             const s = q.toLowerCase();
-            const rows = s ? list.filter(p => (p.partyName + ' ' + p.number + ' ' + p.reference).toLowerCase().includes(s)) : list;
+            const rows = found || (s ? list.filter(p => (p.partyName + ' ' + p.number + ' ' + p.reference).toLowerCase().includes(s)) : list);
+            el.querySelector('[data-capnote]').textContent = !q && list.length >= CAP ? t('Showing the newest 2,000 transactions — search to find older ones.') : '';
             ui.mount(el.querySelector('[data-list]'), sortTable(st, [
                 { key: 'date', label: 'Date', sort: p => new Date(p.date).getTime(), render: p => html`<span class="whitespace-nowrap">${fmt.dateTime(p.date)}</span>` },
                 { key: 'number', label: 'Transaction ID', render: p => html`<span class="font-mono text-xs font-semibold">${p.number}</span>` },
@@ -74,12 +77,19 @@ HP.page('/payments', {
             ], rows, list.length ? html`<div class="py-12 text-center text-sm text-muted">No transactions match "${q}".</div>`
                 : ui.empty({ iconName: 'receipt', title: 'No transactions found', text: 'Record your first payment to start tracking customer and supplier ledger activity.', action: html`<button class="btn btn-primary" data-new>${icon('plus')}New Transaction</button>` })));
         };
-        const load = async () => { list = await api.get('/api/finance/payments'); draw(); };
+        const load = async () => { [list, totals] = await Promise.all([api.get('/api/finance/payments'), api.get('/api/finance/payments', { totals: 1 }).catch(() => null)]); found = null; if (q && list.length >= CAP) found = await api.get('/api/finance/payments', { q }); draw(); };
         ui.mount(el, html`${ui.pageHeader({ title: t('Payments In/Out'), subtitle: 'GAAP-compliant cashflow dashboard — track payment in and payment out with live ledger visibility.' })}
           <div class="mb-6 grid gap-4 md:grid-cols-3" data-kpis></div>
           <div class="card mb-4 flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div class="relative w-full max-w-sm">${searchIcon()}<input class="input ps-9" placeholder="Search by Customer/Supplier" data-q></div><button class="btn btn-primary" data-new>${icon('plus')}New Transaction</button></div>
+          <p class="mb-2 text-xs text-muted empty:hidden" data-capnote></p>
           <div class="card" data-list>${ui.loading()}</div>`);
-        el.querySelector('[data-q]').addEventListener('input', e => { q = e.target.value; draw(); });
+        let tm;
+        el.querySelector('[data-q]').addEventListener('input', e => {
+            q = e.target.value; found = null;
+            clearTimeout(tm);
+            if (q.trim() && list.length >= CAP) tm = setTimeout(async () => { const want = q; const r = await api.get('/api/finance/payments', { q: want }).catch(ui.fail); if (r && want === q) { found = r; draw(); } }, 300);
+            draw();
+        });
         onSort(el, st, draw);
         ui.on(el, 'click', '[data-new]', () => paymentDrawer('IN', load));
         ui.on(el, 'click', '[data-print]', (e, b) => printReceipt(list.find(p => p.id === b.dataset.print)));
@@ -305,7 +315,7 @@ HP.page('/banks', {
               <div class="mt-8 flex flex-wrap items-end justify-between gap-3"><div><h2 class="text-lg font-semibold">Transactions Ledger</h2><p class="text-sm text-muted">All treasury movements — transfers, payments, and account activity</p></div>
                 ${sel ? html`<div class="flex items-center gap-2"><span class="badge badge-accent">${sel.name}</span><button class="btn btn-ghost btn-sm" data-clear>${icon('x')}Show all accounts</button></div>` : ''}</div>
               <div class="card mt-3">${shown.length ? html`<div class="overflow-x-auto thin-scroll"><table class="tbl"><thead><tr><th>Date</th><th>Bank</th><th>Type</th><th>Reference/Note</th><th class="!text-right">Amount</th>${sel ? html`<th class="!text-right">Balance</th>` : ''}</tr></thead><tbody>
-                ${shown.slice(0, 500).map(r => html`<tr><td class="whitespace-nowrap">${fmt.dateTime(r.date)}</td><td>${r.accountName}</td><td><span class="badge ${r.amount >= 0 ? 'badge-good' : 'badge-bad'}">${TXN[r.type] || r.type}</span></td>
+                ${shown.map(r => html`<tr><td class="whitespace-nowrap">${fmt.dateTime(r.date)}</td><td>${r.accountName}</td><td><span class="badge ${r.amount >= 0 ? 'badge-good' : 'badge-bad'}">${TXN[r.type] || r.type}</span></td>
                   <td><div>${r.refNo}</div>${r.note && r.note !== r.refNo ? html`<div class="text-xs text-muted">${r.note}</div>` : ''}</td><td class="num font-semibold ${r.amount >= 0 ? 'text-good' : 'text-bad'}">${r.amount >= 0 ? '+ ' : '− '}${fmt.money(Math.abs(r.amount))}</td>${sel ? html`<td class="num">${fmt.money(r.balance)}</td>` : ''}</tr>`)}</tbody></table></div>`
                 : html`<div class="py-12 text-center text-sm text-muted">No transactions yet.</div>`}</div>`);
             const dn = el.querySelector('[data-donut]');

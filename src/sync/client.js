@@ -74,6 +74,13 @@ async function ensureSchema() {
 
 async function loadState() {
     const kv = await getKV();
+    // the server moved (e.g. to another region): a PC activated against an old address switches to the new one; its
+    // device token stays valid (same database and secret)
+    const old = String(process.env.HP_SERVER_REPLACES || '').split(/\s+/).filter(Boolean).map(u => u.replace(/\/+$/, ''));
+    if (kv.serverUrl && process.env.HP_SERVER_URL && old.includes(kv.serverUrl.replace(/\/+$/, ''))) {
+        kv.serverUrl = process.env.HP_SERVER_URL.replace(/\/+$/, '');
+        await setKV({ serverUrl: kv.serverUrl });
+    }
     state.set({
         device: kv.deviceToken ? { id: kv.deviceId, code: kv.deviceCode, name: kv.deviceName, tenantId: kv.tenantId } : null,
         serverUrl: kv.serverUrl || process.env.HP_SERVER_URL || '',

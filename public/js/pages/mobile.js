@@ -29,6 +29,30 @@ function balanceWords(type, balance) {
 }
 const amountRow = (type, balance) => { const w = balanceWords(type, balance); return html`<div class="text-end"><div class="font-bold text-${w.tone}">${fmt.money(Math.abs(balance))}</div><div class="text-[11px] text-muted">${t(w.label)}</div></div>`; };
 
+// ── long lists ──
+// The first `step` rows, then "Show more" adds `step` more. Search and filters run over the whole list before it is
+// drawn, so a match shows up wherever it is in the list. row(item, index) draws one row (index = place in `rows`).
+const LIST = 'divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm';
+function longList(box, rows, row, { step = 50, wrap = LIST, none = '' } = {}) {
+    let shown = Math.min(step, rows.length);
+    const draw = () => {
+        box.innerHTML = String(rows.length ? html`<div class="${wrap}">${rows.slice(0, shown).map(row)}</div>
+            ${shown < rows.length ? html`<button type="button" class="btn btn-outline mt-3 h-11 w-full justify-center" data-show-more>${t('Show more')} (${rows.length - shown})</button>` : ''}` : none);
+    };
+    box.onclick = e => { if (e.target.closest('[data-show-more]')) { shown = Math.min(rows.length, shown + step); draw(); } };
+    draw();
+}
+// khata entries: a search box once there are enough to need one; it matches the remark, reference, type, date or amount
+const entrySearch = (n, q) => (n > 20 ? html`<input class="input mb-3 h-11 w-full" type="search" placeholder="${t('Search entries: remark, amount or date')}" data-eq value="${q}" autocomplete="off">` : '');
+function entryMatcher(q, label) {
+    const s = String(q || '').trim().toLowerCase();
+    if (!s) return () => true;
+    const num = s.replace(/[,\s]/g, '');
+    const isNum = /^\d+(\.\d+)?$/.test(num);
+    return e => [label(e), e.refNo, e.note, fmt.date(e.date)].some(x => String(x || '').toLowerCase().includes(s))
+        || (isNum && [e.debit, e.credit].some(v => v && String(v / 100).includes(num)));
+}
+
 // choose a customer or vendor (search by name or phone); resolves the party or null
 async function pickParty(type) {
     let list;
@@ -38,17 +62,16 @@ async function pickParty(type) {
         let picked = null;
         const m = ui.modal({
             title: type === 'VENDOR' ? t('Choose vendor') : t('Choose customer'), width: 520,
-            body: html`<input class="input h-11" type="search" placeholder="${t('Search name or phone')}" data-q autocomplete="off"><div class="mt-3 divide-y divide-line-soft" data-list></div>`,
+            body: html`<input class="input h-11" type="search" placeholder="${t('Search name or phone')}" data-q autocomplete="off"><div class="mt-3" data-list></div>`,
             footer: html`<button class="btn btn-outline me-auto" data-new>${icon('userPlus')}${type === 'VENDOR' ? t('New vendor') : t('New customer')}</button><button class="btn btn-outline" data-close>${t('Cancel')}</button>`,
             onClose: () => resolve(picked),
         });
         const box = m.el.querySelector('[data-list]');
         const draw = q => {
             q = (q || '').toLowerCase();
-            const rows = list.filter(p => !q || p.name.toLowerCase().includes(q) || String(p.phone || '').includes(q)).slice(0, 200);
-            box.innerHTML = String(rows.length ? html`${rows.map(p => html`<button type="button" class="flex w-full items-center gap-3 px-1 py-3 text-start" data-pick="${p.id}">
-                ${avatar(p.name, type === 'VENDOR' ? 'bad' : 'warn')}<span class="min-w-0 flex-1"><span class="block truncate font-medium">${p.name}</span><span class="block text-xs text-muted">${p.phone || '—'}</span></span>${amountRow(type, p.balance)}</button>`)}`
-                : empty(list.length ? 'Nothing matches.' : 'No accounts yet. Add one with the button below.'));
+            const rows = list.filter(p => !q || p.name.toLowerCase().includes(q) || String(p.phone || '').includes(q));
+            longList(box, rows, p => html`<button type="button" class="flex w-full items-center gap-3 px-1 py-3 text-start" data-pick="${p.id}">
+                ${avatar(p.name, type === 'VENDOR' ? 'bad' : 'warn')}<span class="min-w-0 flex-1"><span class="block truncate font-medium">${p.name}</span><span class="block text-xs text-muted">${p.phone || '—'}</span></span>${amountRow(type, p.balance)}</button>`, { wrap: 'divide-y divide-line-soft', none: empty(list.length ? 'Nothing matches.' : 'No accounts yet. Add one with the button below.') });
         };
         draw('');
         m.el.querySelector('[data-q]').addEventListener('input', e => draw(e.target.value));
@@ -126,6 +149,8 @@ HP.page('/m', {
         const [k, v] = await Promise.all([api.get('/api/khata/summary').catch(() => null), api.get('/api/parties/stats', { type: 'VENDOR' }).catch(() => null)]);
         const kp = (k && k.kpis) || {};
         if (HP.native && HP.native.refreshAlarms) HP.native.refreshAlarms(); // payment alarms for vendor dues
+        // what the tiles open next, fetched in the background so they open at once
+        api.prefetch([['/api/parties', { type: 'CUSTOMER' }], ['/api/parties', { type: 'VENDOR' }], ['/api/khata/dues', { view: 'pending' }], ['/api/inventory/catalog']]);
         const tile = (href, iconName, label, urdu, tone, caption) => html`<a href="${href}" data-link class="flex min-h-[124px] flex-col justify-between rounded-2xl border border-line bg-surface p-4 shadow-sm transition active:scale-[.98]">
             <span class="flex h-11 w-11 items-center justify-center rounded-xl ${TONE[tone]}">${icon(iconName, 'w-6 h-6')}</span>
             <span><span class="block text-base font-bold leading-tight">${t(label)}</span>${isUr() ? '' : html`<span class="block text-sm text-muted">${urdu}</span>`}${caption ? html`<span class="mt-0.5 block text-[11px] leading-tight text-muted">${caption}</span>` : ''}</span></a>`;
@@ -303,7 +328,7 @@ HP.page('/m/reports', {
                     <a href="/m/stock?filter=LOW" data-link>${stat('Low stock items', String(d.lowStockCount || 0), d.lowStockCount ? 'warn' : '')}</a>
                     <a href="/m/accounts?tab=CUSTOMER" data-link>${stat('To receive', fmt.money(d.live.receivable), 'warn')}</a>
                     <a href="/m/vendors" data-link>${stat('To pay', fmt.money(d.live.payable), 'bad')}</a></div>
-                  <p class="mt-4 text-center text-xs text-muted">${d.range.fromDay === d.range.toDay ? fmt.date(d.range.fromDay) : `${fmt.date(d.range.fromDay)} – ${fmt.date(d.range.toDay)}`}</p>`);
+                  <p class="mt-4 text-center text-xs text-muted" dir="ltr">${d.range.fromDay === d.range.toDay ? fmt.date(d.range.fromDay) : `${fmt.date(d.range.fromDay)} – ${fmt.date(d.range.toDay)}`}</p>`);
             } catch (e) { ui.mount(body, html`<div class="text-sm text-bad">${e.message}</div>`); }
         };
         ui.on(el, 'click', '[data-chips="period"] [data-v]', (e, b) => { preset = b.dataset.v; history.replaceState(history.state, '', '/m/reports?preset=' + preset); load(); });
@@ -327,10 +352,9 @@ HP.page('/m/accounts', {
             const s = q.toLowerCase();
             const rows = list.filter(p => (tab === 'ALL' || p.type === tab) && (!s || p.name.toLowerCase().includes(s) || String(p.phone || '').includes(s)))
                 .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance) || a.name.localeCompare(b.name));
-            el.querySelector('[data-list]').innerHTML = String(rows.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm">${rows.slice(0, 300).map(p => html`
+            longList(el.querySelector('[data-list]'), rows, p => html`
                 <a href="${p.type === 'VENDOR' ? '/m/vendors/' : '/m/accounts/'}${p.id}" data-link class="flex items-center gap-3 px-4 py-3">${avatar(p.name, p.type === 'VENDOR' ? 'bad' : 'warn')}
-                  <span class="min-w-0 flex-1"><span class="block truncate font-medium">${p.name}</span><span class="block text-xs text-muted">${p.type === 'VENDOR' ? t('Vendor') : t('Customer')}${p.phone ? ' · ' + p.phone : ''}</span></span>${amountRow(p.type, p.balance)}</a>`)}</div>`
-                : empty(list.length ? 'Nothing matches.' : 'No customers or vendors yet.'));
+                  <span class="min-w-0 flex-1"><span class="block truncate font-medium">${p.name}</span><span class="block text-xs text-muted">${p.type === 'VENDOR' ? t('Vendor') : t('Customer')}${p.phone ? ' · ' + p.phone : ''}</span></span>${amountRow(p.type, p.balance)}</a>`, { none: empty(list.length ? 'Nothing matches.' : 'No customers or vendors yet.') });
         };
         ui.mount(el, html`<div class="grid grid-cols-2 gap-3">
               <button type="button" data-tabjump="CUSTOMER" class="text-start">${stat('To receive', fmt.money(sumPos('CUSTOMER')), 'warn')}</button>
@@ -363,15 +387,16 @@ HP.page('/m/accounts/:id', {
         const entries = [...d.entries].reverse();
         const lang = HP.lang() === 'ur' ? 'ur' : 'en';
         const label = e => (HP.khata && HP.khata.typeLabel ? HP.khata.typeLabel(e.type, lang) : e.type);
-        let showAll = false;
-        const entryRows = () => (showAll ? entries : entries.slice(0, 60)).map(e => {
+        let eq = '';
+        const entryRow = e => {
             // what the entry did to the balance (in the direction the balance is read)
             const up = vendor ? e.credit - e.debit : e.debit - e.credit;
             const name = label(e), same = x => !x || x === name || x === e.type || /^(payment received|payment made|opening balance)$/i.test(x);
             return html`<div class="flex items-start gap-3 px-4 py-3"><div class="min-w-0 flex-1"><div class="font-medium">${name}${!same(e.refNo) ? html` <span class="text-xs text-muted">${e.refNo}</span>` : ''}</div>
-                <div class="text-xs text-muted">${fmt.date(e.date)}${!same(e.note) && e.note !== e.refNo ? ' · ' + e.note : ''}</div></div>
+                <div class="text-xs text-muted"><bdi>${fmt.date(e.date)}</bdi>${!same(e.note) && e.note !== e.refNo ? ' · ' + e.note : ''}</div></div>
               <div class="text-end"><div class="font-semibold ${up > 0 ? (vendor ? 'text-bad' : 'text-warn') : 'text-good'}">${up > 0 ? '+' : '−'}${fmt.money(Math.abs(up))}</div><div class="text-[11px] text-muted">${t('Bal')} ${fmt.money(e.balance)}</div></div></div>`;
-        });
+        };
+        const drawEntries = () => longList(el.querySelector('[data-entries]'), entries.filter(entryMatcher(eq, label)), entryRow, { step: 60, none: empty(entries.length ? 'Nothing matches.' : 'No entries yet.') });
         const actions = vendor
             ? [['pay', 'Payment', 'arrowUp', 'bad'], ...(p.phone ? [['call', 'Call', 'smartphone', 'accent']] : [])]
             : [['rec', 'Receipt', 'arrowDown', 'good'], ['remind', 'Reminder', 'bell', 'warn'], ['promise', 'Promise', 'calendar', 'accent'], ['statement', 'Statement', 'file', 'accent'], ...(p.phone ? [['call', 'Call', 'smartphone', 'accent']] : [])];
@@ -381,17 +406,17 @@ HP.page('/m/accounts/:id', {
             <div class="mt-4 rounded-xl ${w.tone === 'muted' ? 'bg-surface-2' : 'bg-' + w.tone + '-soft'} px-4 py-3"><div class="text-xs text-muted">${t(w.label)}</div><div class="text-2xl font-bold ${w.tone === 'muted' ? '' : 'text-' + w.tone}">${fmt.money(Math.abs(d.balance))}</div></div>
             <div class="mt-4 grid ${COLS[Math.min(actions.length, 5)]} gap-1">${actions.map(([k, l, ic, tone]) => html`<button type="button" class="flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-xs font-medium hover:bg-surface-2" data-act="${k}"><span class="flex h-10 w-10 items-center justify-center rounded-full ${TONE[tone]}">${icon(ic, 'w-5 h-5')}</span>${t(l)}</button>`)}</div></div>
           <div class="eyebrow mb-2 mt-5">${t('Khata entries')} (${entries.length})</div>
-          ${entries.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm" data-entries>${entryRows()}</div>
-            ${!showAll && entries.length > 60 ? html`<button type="button" class="btn btn-outline mt-3 w-full justify-center" data-more>${t('Show all')} (${entries.length})</button>` : ''}` : empty('No entries yet.')}`);
+          ${entrySearch(entries.length, eq)}<div data-entries></div>`);
         draw();
-        ui.on(el, 'click', '[data-more]', () => { showAll = true; draw(); });
+        drawEntries();
+        ui.on(el, 'input', '[data-eq]', (e, i) => { eq = i.value; drawEntries(); });
         ui.on(el, 'click', '[data-act]', async (e, b) => {
             const k = b.dataset.act;
             if (k === 'pay') go('/m/payment?party=' + p.id);
             else if (k === 'rec') go('/m/receipt?party=' + p.id);
             else if (k === 'remind') HP.khata.sendReminder(party, { kind: 'BALANCE_REMINDER' });
             else if (k === 'promise') HP.khata.promiseDialog(party, () => ui.toast(t('Promise saved')));
-            else if (k === 'statement') HP.khata.printStatement(d, lang === 'ur' ? 'ur' : 'both'); // Android: print / Save as PDF, then share
+            else if (k === 'statement') HP.khata.statementDialog(d, lang === 'ur' ? 'ur' : 'both'); // Android: print / Save as PDF, then share
             else if (k === 'call') window.open('tel:' + String(p.phone).replace(/[^\d+]/g, ''), '_blank');
         });
     },
@@ -409,12 +434,12 @@ HP.page('/m/stock', {
             const s = q.toLowerCase();
             const rows = all.filter(p => (filter === 'ALL' || (filter === 'LOW' ? isLow(p) || isOut(p) : isOut(p)))
                 && (!s || [p.name, p.sku, p.barcode, p.category].some(x => String(x || '').toLowerCase().includes(s))));
-            el.querySelector('[data-list]').innerHTML = String(rows.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm">${rows.slice(0, 300).map(p => {
+            longList(el.querySelector('[data-list]'), rows, p => {
                 const tone = isOut(p) ? 'bad' : isLow(p) ? 'warn' : '';
                 return html`<div class="flex items-center gap-3 px-4 py-3"><div class="min-w-0 flex-1"><div class="truncate font-medium">${p.name}</div>
                     <div class="text-xs text-muted">${[p.category, p.barcode || p.sku].filter(Boolean).join(' · ') || '—'}</div><div class="text-xs text-muted">${t('Price')} ${fmt.money(p.retailPrice)}${p.cost ? ` · ${t('Cost')} ${fmt.money(p.cost)}` : ''}</div></div>
                   <div class="text-end"><div class="text-lg font-bold ${tone ? 'text-' + tone : ''}">${fmt.qty(p.stock)}</div><div class="text-[11px] text-muted">${p.baseUnit || ''}${isOut(p) ? ' · ' + t('Out') : isLow(p) ? ' · ' + t('Low') : ''}</div></div></div>`;
-            })}</div>${rows.length > 300 ? html`<p class="mt-2 text-center text-xs text-muted">${t('Showing the first 300 — search to find others.')}</p>` : ''}` : empty('Nothing matches.'));
+            }, { none: empty('Nothing matches.') });
         };
         ui.mount(el, html`<div class="grid grid-cols-3 gap-2">${stat('Items', String(all.length))}${stat('Low', String(all.filter(isLow).length), 'warn')}${stat('Out', String(all.filter(isOut).length), 'bad')}</div>
             ${card(html`<div class="flex items-center justify-between"><span class="text-sm text-muted">${t('Stock value (at cost)')}</span><span class="text-lg font-bold">${fmt.money(value)}</span></div>`, 'mt-3')}
@@ -445,7 +470,7 @@ function vendorReport(box, preset) {
               <span class="min-w-0 flex-1"><span class="block truncate font-medium">${v.name}</span>
                 <span class="block text-xs text-muted">${t('Bought')} ${fmt.money(v.purchased)}</span><span class="block text-xs text-muted">${t('Paid')} ${fmt.money(v.paid)}</span></span>${amountRow('VENDOR', v.balance)}</a>`)}</div>`
             : empty('No vendor activity in this period.')}
-          <p class="mt-4 text-center text-xs text-muted">${r.range.fromDay === r.range.toDay ? fmt.date(r.range.fromDay) : `${fmt.date(r.range.fromDay)} – ${fmt.date(r.range.toDay)}`}</p>`);
+          <p class="mt-4 text-center text-xs text-muted" dir="ltr">${r.range.fromDay === r.range.toDay ? fmt.date(r.range.fromDay) : `${fmt.date(r.range.fromDay)} – ${fmt.date(r.range.toDay)}`}</p>`);
     }).catch(e => ui.mount(body, html`<div class="text-sm text-bad">${e.message}</div>`));
 }
 
@@ -463,12 +488,12 @@ HP.page('/m/vendors', {
             const s = q.toLowerCase();
             const rows = list.filter(p => !s || p.name.toLowerCase().includes(s) || String(p.phone || '').includes(s))
                 .sort((a, b) => (next[a.id] ? next[a.id].dueDate : '9999') .localeCompare(next[b.id] ? next[b.id].dueDate : '9999') || b.balance - a.balance || a.name.localeCompare(b.name));
-            el.querySelector('[data-list]').innerHTML = String(rows.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm">${rows.slice(0, 300).map(p => {
+            longList(el.querySelector('[data-list]'), rows, p => {
                 const d = next[p.id];
                 return html`<a href="/m/vendors/${p.id}" data-link class="flex items-center gap-3 px-4 py-3">${avatar(p.name, 'bad')}
                   <span class="min-w-0 flex-1"><span class="block truncate font-medium">${p.name}</span>
                     ${d ? html`<span class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">${t('Pay')} ${fmt.money(d.amount)} ${dueBadge(d.daysLeft)}</span>` : html`<span class="block text-xs text-muted">${p.phone || '—'}</span>`}</span>${amountRow('VENDOR', p.balance)}</a>`;
-            })}</div>` : empty(list.length ? 'Nothing matches.' : 'No vendors yet. Add the people you buy goods from.'));
+            }, { none: empty(list.length ? 'Nothing matches.' : 'No vendors yet. Add the people you buy goods from.') });
         };
         const draw = () => {
             ui.mount(el, html`<div class="grid grid-cols-2 gap-3">${stat('To pay vendors', fmt.money(payable), 'bad')}${stat('Due in 7 days', fmt.money(dues.counts.vendorDueWeek || 0), late ? 'bad' : 'warn', late ? `${late} ${t('late')}` : '')}</div>
@@ -502,7 +527,7 @@ HP.page('/m/vendors/:id', {
         if (d.party.type !== 'VENDOR') return HP.router.navigate('/m/accounts/' + id, { replace: true });
         const lang = isUr() ? 'ur' : 'en';
         const label = e => (HP.khata && HP.khata.typeLabel ? HP.khata.typeLabel(e.type, lang) : e.type);
-        let showAll = false;
+        let eq = '', drawEntries = () => {};
         const draw = () => {
             const p = d.party, w = balanceWords('VENDOR', d.balance);
             const entries = [...d.entries].reverse();
@@ -516,20 +541,23 @@ HP.page('/m/vendors/:id', {
                   ${[['goods', 'Goods received', 'package', 'bad'], ...(can('finance.manage') ? [['pay', 'Payment', 'arrowUp', 'good']] : []), ['due', 'Pay-by date', 'calendar', 'warn'], ...(p.phone ? [['call', 'Call', 'smartphone', 'accent']] : [])].map(([k, l, ic, tone]) => html`<button type="button" class="flex flex-col items-center gap-1 rounded-xl px-1 py-2 text-xs font-medium hover:bg-surface-2" data-act="${k}"><span class="flex h-10 w-10 items-center justify-center rounded-full ${TONE[tone]}">${icon(ic, 'w-5 h-5')}</span>${t(l)}</button>`)}</div></div>
               <div class="eyebrow mb-2 mt-5">${t('Payments due')} (${dues.rows.length})</div>
               ${dues.rows.length ? html`<div class="space-y-2">${dues.rows.map(x => html`<div class="rounded-2xl border border-line bg-surface p-3.5 shadow-sm">
-                  <div class="flex items-center justify-between gap-3"><div><div class="font-bold">${fmt.money(x.amount)}</div><div class="text-xs text-muted">${fmt.date(x.dueDate)}${x.note ? ' · ' + x.note : ''}</div></div>${dueBadge(x.daysLeft)}</div>
+                  <div class="flex items-center justify-between gap-3"><div><div class="font-bold">${fmt.money(x.amount)}</div><div class="text-xs text-muted"><bdi>${fmt.date(x.dueDate)}</bdi>${x.note ? ' · ' + x.note : ''}</div></div>${dueBadge(x.daysLeft)}</div>
                   <div class="mt-3 grid ${can('finance.manage') ? 'grid-cols-3' : 'grid-cols-2'} gap-2">${can('finance.manage') ? html`<button type="button" class="btn btn-primary h-9 justify-center" data-pay="${x.id}">${t('Pay')}</button>` : ''}
                     <button type="button" class="btn btn-outline h-9 justify-center" data-due="${x.id}">${icon('calendar')}${t('Date')}</button>
                     <button type="button" class="btn btn-outline h-9 justify-center text-bad" data-cancel="${x.id}">${icon('x')}${t('Remove')}</button></div></div>`)}</div>
                 <p class="mt-2 text-xs text-muted">${t('Payments clear these dates by themselves, oldest first.')}</p>`
                 : empty('No payment dates set. Use "Pay-by date" or set one when goods are received.')}
               <div class="eyebrow mb-2 mt-5">${t('Khata entries')} (${entries.length})</div>
-              ${entries.length ? html`<div class="divide-y divide-line-soft rounded-2xl border border-line bg-surface shadow-sm">${(showAll ? entries : entries.slice(0, 60)).map(e => {
+              ${entrySearch(entries.length, eq)}<div data-entries></div>`);
+            const entryRow = e => {
                     const up = e.credit - e.debit, name = label(e), same = x => !x || x === name || x === e.type || /^(payment made|opening balance|goods received)$/i.test(x);
                     return html`<div class="flex items-start gap-3 px-4 py-3"><div class="min-w-0 flex-1"><div class="font-medium">${name}${!same(e.refNo) ? html` <span class="text-xs text-muted">${e.refNo}</span>` : ''}</div>
-                        <div class="text-xs text-muted">${fmt.date(e.date)}${!same(e.note) && e.note !== e.refNo ? ' · ' + e.note : ''}</div>
+                        <div class="text-xs text-muted"><bdi>${fmt.date(e.date)}</bdi>${!same(e.note) && e.note !== e.refNo ? ' · ' + e.note : ''}</div>
                         ${e.type === 'BILL' ? html`<button type="button" class="mt-1 text-xs text-bad" data-remove="${e.id}">${t('Remove (entered by mistake)')}</button>` : ''}</div>
                       <div class="text-end"><div class="font-semibold ${up > 0 ? 'text-bad' : 'text-good'}">${up > 0 ? '+' : '−'}${fmt.money(Math.abs(up))}</div><div class="text-[11px] text-muted">${t('Bal')} ${fmt.money(e.balance)}</div></div></div>`;
-                })}</div>${!showAll && entries.length > 60 ? html`<button type="button" class="btn btn-outline mt-3 w-full justify-center" data-more>${t('Show all')} (${entries.length})</button>` : ''}` : empty('No entries yet.')}`);
+                };
+            drawEntries = () => longList(el.querySelector('[data-entries]'), entries.filter(entryMatcher(eq, label)), entryRow, { step: 60, none: empty(entries.length ? 'Nothing matches.' : 'No entries yet.') });
+            drawEntries();
         };
         const reload = async () => { await load(true); draw(); };
         draw();
@@ -604,7 +632,7 @@ HP.page('/m/vendors/:id', {
             async onSubmit(v, dr) { await api.put('/api/parties/' + id, v); dr.close(); ui.toast(t('Saved')); await reload(); },
         });
 
-        ui.on(el, 'click', '[data-more]', () => { showAll = true; draw(); });
+        ui.on(el, 'input', '[data-eq]', (e, i) => { eq = i.value; drawEntries(); });
         ui.on(el, 'click', '[data-act]', (e, b) => {
             const k = b.dataset.act;
             if (k === 'goods') goods(); else if (k === 'pay') pay(Math.max(0, d.balance)); else if (k === 'due') setDue(); else if (k === 'edit') edit();
@@ -644,15 +672,14 @@ HP.page('/m/reminders', {
                     const s = await api.get('/api/khata/promises', { view });
                     rows = s.rows.map(r => ({ party: { id: r.partyId, name: r.name, phone: r.phone, balance: r.balance }, promise: r, sub: `${t('Promised')} ${fmt.money(r.amount)} · ${fmt.date(r.promisedDate)}${r.remindCount ? ` · ${t('reminded')} ${r.remindCount}×` : ''}` }));
                 }
-                ui.mount(body, rows.length ? html`<div class="space-y-3">${rows.map((r, i) => html`<div class="rounded-2xl border border-line bg-surface p-4 shadow-sm">
+                longList(body, rows, (r, i) => html`<div class="rounded-2xl border border-line bg-surface p-4 shadow-sm">
                     <a href="/m/accounts/${r.party.id}" data-link class="flex items-start gap-3">${avatar(r.party.name, 'warn')}
                       <span class="min-w-0 flex-1"><span class="block truncate font-semibold">${r.party.name}</span><span class="block text-xs text-muted">${r.sub}</span></span>
                       <span class="text-end"><span class="block font-bold text-warn">${fmt.money(r.party.balance)}</span>${r.promise && r.promise.daysLeft !== undefined ? dueBadge(r.promise.daysLeft) : ''}</span></a>
                     <div class="mt-3 grid grid-cols-3 gap-2">
                       <button type="button" class="btn btn-primary h-10 justify-center" data-remind="${i}">${icon('bell')}${t('Remind')}</button>
                       <button type="button" class="btn btn-outline h-10 justify-center" data-promise="${i}">${icon('calendar')}${t('Promise')}</button>
-                      <button type="button" class="btn btn-outline h-10 justify-center" data-rec="${i}">${icon('arrowDown')}${t('Receive')}</button></div></div>`)}</div>`
-                    : empty(view === 'owing' ? 'Nobody owes you money.' : view === 'today' ? 'No promises due today.' : view === 'overdue' ? 'No late promises.' : 'No upcoming promises.'));
+                      <button type="button" class="btn btn-outline h-10 justify-center" data-rec="${i}">${icon('arrowDown')}${t('Receive')}</button></div></div>`, { step: 30, wrap: 'space-y-3', none: empty(view === 'owing' ? 'Nobody owes you money.' : view === 'today' ? 'No promises due today.' : view === 'overdue' ? 'No late promises.' : 'No upcoming promises.') });
                 ui.on(body, 'click', '[data-remind]', (e, b) => { const r = rows[+b.dataset.remind]; const pr = r.promise && r.promise.promisedDate ? r.promise : null; HP.khata.sendReminder(r.party, pr && view !== 'owing' ? { kind: 'PROMISE_REMINDER', promise: pr, onDone: load } : { kind: 'BALANCE_REMINDER', onDone: load }); });
                 ui.on(body, 'click', '[data-promise]', (e, b) => HP.khata.promiseDialog(rows[+b.dataset.promise].party, load));
                 ui.on(body, 'click', '[data-rec]', (e, b) => go('/m/receipt?party=' + rows[+b.dataset.rec].party.id));
@@ -666,7 +693,7 @@ HP.page('/m/reminders', {
             ui.mount(body, s.rows.length ? html`${card(html`<div class="flex items-center justify-between"><span class="text-sm text-muted">${t('To pay on the dates below')}</span><span class="text-lg font-bold text-bad">${fmt.money(total)}</span></div>`)}
                 <div class="mt-3 space-y-3">${s.rows.map(r => html`<div class="rounded-2xl border border-line bg-surface p-4 shadow-sm">
                   <a href="/m/vendors/${r.partyId}" data-link class="flex items-start gap-3">${avatar(r.name, 'bad')}
-                    <span class="min-w-0 flex-1"><span class="block truncate font-semibold">${r.name}</span><span class="block text-xs text-muted">${fmt.date(r.dueDate)}${r.note ? ' · ' + r.note : ''}</span></span>
+                    <span class="min-w-0 flex-1"><span class="block truncate font-semibold">${r.name}</span><span class="block text-xs text-muted"><bdi>${fmt.date(r.dueDate)}</bdi>${r.note ? ' · ' + r.note : ''}</span></span>
                     <span class="text-end"><span class="block font-bold text-bad">${fmt.money(r.amount)}</span>${dueBadge(r.daysLeft)}</span></a>
                   <div class="mt-3 grid grid-cols-2 gap-2"><a href="/m/vendors/${r.partyId}${can('finance.manage') ? '?pay=' + r.id : ''}" data-link class="btn btn-primary h-10 justify-center">${icon('arrowUp')}${t('Pay now')}</a>
                     <a href="/m/vendors/${r.partyId}" data-link class="btn btn-outline h-10 justify-center">${t('Open vendor')}</a></div></div>`)}</div>`

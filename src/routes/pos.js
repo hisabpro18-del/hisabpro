@@ -270,9 +270,11 @@ router.get('/sales', VIEW, async (req, res) => {
     }
     if (!Perms.has(req.user, 'sales.view')) where.cashierId = req.user.id; // a cashier sees only their own sales
     const list = await prisma.sale.findMany({ where, orderBy: { date: 'desc' }, take: Math.min(Number(req.query.limit) || 1000, 5000) });
+    // the totals count every matching sale, not only the ones listed (the list stops at its limit)
+    const all = await prisma.sale.aggregate({ where, _count: true, _sum: { total: true, returnedTotal: true, due: true } });
     res.json({
         sales: list.map(s => ({ id: s.id, number: s.number, date: s.date, customerName: s.customerName, status: s.status, mode: s.mode, total: N(s.total), due: N(s.due), paid: N(s.paid), returnedTotal: N(s.returnedTotal), cashierName: s.cashierName, itemsCount: s.itemsCount })),
-        summary: { count: list.length, revenue: list.reduce((a, s) => a + N(s.total) - N(s.returnedTotal), 0), due: list.reduce((a, s) => a + N(s.due), 0) },
+        summary: { count: all._count, revenue: N(all._sum.total) - N(all._sum.returnedTotal), due: N(all._sum.due), listed: list.length },
     });
 });
 

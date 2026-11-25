@@ -3,7 +3,7 @@
   "appName": "HisabPro",
   "webDir": "www",
   "server": {
-    "url": "https://hisabpro-2r1x.onrender.com",
+    "url": "https://hisabpro-1-jutf.onrender.com",
     "cleartext": false,
     "errorPath": "error.html"
   },

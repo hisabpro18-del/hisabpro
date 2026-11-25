@@ -7,7 +7,50 @@
     const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
     // delegated listener: on(root, 'click', '[data-act=save]', (e, el) => …)
     const on = (root, type, sel, fn) => root.addEventListener(type, e => { const el = e.target.closest(sel); if (el && root.contains(el)) fn(e, el); });
-    const mount = (el, safe) => { el.innerHTML = String(safe); return el; };
+    // ── pages for long tables ──
+    // A table (.tbl) with more than PAGE rows shows PAGE at a time, with Previous / Next under it. Pages only hide rows the
+    // page already drew: search and filters run over the whole list before drawing, so a match is found on whatever page
+    // it falls. Redrawn with the same number of rows (an edit, a sort), a table stays on its page; a new search or filter
+    // (a different number of rows) starts again at page 1. <table data-nopage> opts out. A page that rewrites a table's
+    // rows itself (tbody.innerHTML = …) calls repage(tbody) afterwards.
+    const PAGE = 50;
+    const nf = n => Number(n).toLocaleString('en-US');
+    function pageTable(tbl, memo, key, box) {
+        if (tbl._hpBar) { tbl._hpBar.remove(); tbl._hpBar = null; }
+        if (tbl.closest('[data-nopage]') || !tbl.tBodies[0]) return;
+        const rows = Array.from(tbl.tBodies[0].rows);
+        if (rows.length <= PAGE) { delete memo[key]; return; }
+        const pages = Math.ceil(rows.length / PAGE);
+        let page = memo[key] && memo[key].count === rows.length ? Math.min(memo[key].page, pages) : 1;
+        let anchor = tbl.closest('.overflow-x-auto');
+        if (!anchor || anchor === box || !box.contains(anchor)) anchor = tbl; // the bar stays inside the box (it is redrawn with it)
+        const bar = tbl._hpBar = document.createElement('div');
+        bar.className = 'mt-3 flex flex-wrap items-center justify-between gap-2';
+        bar.dataset.pager = '';
+        anchor.after(bar);
+        const show = () => {
+            const from = (page - 1) * PAGE;
+            rows.forEach((r, i) => { r.style.display = i >= from && i < from + PAGE ? '' : 'none'; });
+            memo[key] = { count: rows.length, page };
+            const btn = (go, label, off) => html`<button type="button" class="btn btn-outline btn-sm" data-pg="${go}" ${off ? raw('disabled') : ''}>${label}</button>`;
+            bar.innerHTML = String(html`<span class="text-sm text-muted">${nf(from + 1)}–${nf(Math.min(from + PAGE, rows.length))} ${t('of')} ${nf(rows.length)}</span>
+                <div class="flex items-center gap-1">${btn('first', '«', page === 1)}${btn('prev', `‹ ${t('Previous')}`, page === 1)}
+                  <span class="px-2 text-sm tabular-nums">${t('Page')} ${nf(page)} / ${nf(pages)}</span>${btn('next', `${t('Next')} ›`, page === pages)}${btn('last', '»', page === pages)}</div>`);
+        };
+        bar.addEventListener('click', e => {
+            const b = e.target.closest('[data-pg]'); if (!b || b.disabled) return;
+            page = { first: 1, prev: page - 1, next: page + 1, last: pages }[b.dataset.pg];
+            show();
+            if (anchor.getBoundingClientRect().top < 0) anchor.scrollIntoView({ block: 'start' });
+        });
+        show();
+    }
+    function pageTables(box) {
+        const memo = box._hpPages || (box._hpPages = {});
+        $$('table.tbl', box).forEach((tbl, i) => pageTable(tbl, memo, i, box));
+    }
+    const repage = inside => { const tbl = inside && inside.closest('table'); if (tbl) pageTable(tbl, tbl._hpMemo || (tbl._hpMemo = {}), 0, document.body); };
+    const mount = (el, safe) => { el.innerHTML = String(safe); pageTables(el); return el; };
 
     // ── toasts ──
     function toast(msg, type = 'ok') {
@@ -42,6 +85,7 @@
             </div>`);
         root.appendChild(wrap);
         const panel = wrap.lastElementChild;
+        pageTables(panel);
         const ctl = {
             el: panel, wrap, persistent,
             body: panel.querySelector('[data-body]'), footer: panel.querySelector('[data-footer]'),
@@ -360,5 +404,5 @@
         });
     }
 
-    HP.ui = { $, $$, on, mount, toast, fail, modal, drawer, backPressed, confirm, field, grid, section, readForm, formDrawer, pageHeader, statCard, badge, spinner, loading, empty, table, seg, tabs, menu, closeMenus, autocomplete, rangeButton, rangePopover, presetLabel, chart, PALETTE, csv, saveBlob, print, readImage, readFile, css };
+    HP.ui = { $, $$, on, mount, pageTables, repage, toast, fail, modal, drawer, backPressed, confirm, field, grid, section, readForm, formDrawer, pageHeader, statCard, badge, spinner, loading, empty, table, seg, tabs, menu, closeMenus, autocomplete, rangeButton, rangePopover, presetLabel, chart, PALETTE, csv, saveBlob, print, readImage, readFile, css };
 })();

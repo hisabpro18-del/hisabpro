@@ -117,8 +117,9 @@ function promiseDialog(party, onDone, existing) {
 // a customer's statement, in English, Urdu or both
 function printStatement(data, lang = 'en', range = {}) {
     const p = data.party, entries = data.entries.filter(e => (!range.from || fmt.ymd(e.date) >= range.from) && (!range.to || fmt.ymd(e.date) <= range.to));
-    const firstIdx = data.entries.indexOf(entries[0]);
-    const opening = firstIdx > 0 ? data.entries[firstIdx - 1].balance : 0;
+    // balance brought forward = the running balance after the last entry before the period (entries are oldest first)
+    const before = range.from ? data.entries.filter(e => fmt.ymd(e.date) < range.from) : [];
+    const opening = before.length ? before[before.length - 1].balance : 0;
     const both = lang === 'both', ur = lang === 'ur';
     const L = (en, u) => (both ? `${en} / ${u}` : ur ? u : en);
     const m = v => fmt.money(v, { noSym: true });
@@ -131,13 +132,33 @@ function printStatement(data, lang = 'en', range = {}) {
         <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f1f5f9">
           <th style="padding:6px;text-align:start">${L('Date', 'تاریخ')}</th><th style="padding:6px;text-align:start">${L('Details', 'تفصیل')}</th><th style="padding:6px;text-align:end">${L('Udhaar (Debit)', 'بنام (ادھار)')}</th><th style="padding:6px;text-align:end">${L('Received (Credit)', 'جمع (وصولی)')}</th><th style="padding:6px;text-align:end">${L('Balance', 'بقایا')}</th></tr></thead>
           <tbody>${range.from && opening ? html`<tr><td style="padding:6px"></td><td style="padding:6px">${L('Opening balance', 'سابقہ بقایا')}</td><td></td><td></td><td style="padding:6px;text-align:end">${m(opening)}</td></tr>` : ''}
-          ${entries.map(e => html`<tr style="border-bottom:1px solid #e5e7eb"><td style="padding:6px;white-space:nowrap">${fmt.date(e.date)}</td><td style="padding:6px">${both ? `${typeLabel(e.type, 'en')} / ${typeLabel(e.type, 'ur')}` : typeLabel(e.type, lang)} ${e.refNo ? html`<span style="color:#555">${e.refNo}</span>` : ''}${e.note && e.note !== 'Paid at the counter' ? html`<div style="color:#666">${e.note}</div>` : ''}</td>
+          ${entries.map(e => html`<tr style="border-bottom:1px solid #e5e7eb"><td style="padding:6px;white-space:nowrap">${fmt.date(e.date)}</td><td style="padding:6px">${both ? `${typeLabel(e.type, 'en')} / ${typeLabel(e.type, 'ur')}` : typeLabel(e.type, lang)} ${e.refNo ? html`<span style="color:#555">${e.refNo}</span>` : ''}${e.note && e.note !== 'Paid at the counter' && e.note !== typeLabel(e.type, 'en') ? html`<div style="color:#666">${e.note}</div>` : ''}</td>
             <td style="padding:6px;text-align:end">${e.debit ? m(e.debit) : ''}</td><td style="padding:6px;text-align:end">${e.credit ? m(e.credit) : ''}</td><td style="padding:6px;text-align:end;font-weight:600">${m(e.balance)}</td></tr>`)}</tbody></table>
         <div style="margin-top:12px;text-align:${ur ? 'left' : 'right'};font-size:16px;font-weight:700">${L('Amount due', 'واجب الادا رقم')}: ${fmt.money(data.balance)}</div>
         <div style="margin-top:28px;display:flex;justify-content:space-between"><div style="border-top:1px solid #000;width:180px;text-align:center;padding-top:4px">${L('Customer signature', 'گاہک کے دستخط')}</div><div style="border-top:1px solid #000;width:180px;text-align:center;padding-top:4px">${L('Shop signature', 'دکان کے دستخط')}</div></div></div>`);
 }
 
-HP.khata = { sendReminder, receiveDialog, promiseDialog, printStatement, messaging, typeLabel };
+// A khata can go back years (e.g. a history moved from another program): a long one asks which period to print, and the
+// statement starts with the balance brought forward. Short khatas print straight away.
+const STATEMENT_PERIODS = [['m1', 'Last 1 month', 1], ['m3', 'Last 3 months', 3], ['m6', 'Last 6 months', 6], ['y1', 'Last 1 year', 12], ['all', 'Whole khata', 0]];
+function statementDialog(data, lang = 'en') {
+    if (data.entries.length <= 40) return printStatement(data, lang);
+    const fromOf = months => { if (!months) return null; const d = new Date(); d.setMonth(d.getMonth() - months); return fmt.ymd(d); };
+    const count = from => data.entries.filter(e => !from || fmt.ymd(e.date) >= from).length;
+    const m = ui.modal({
+        title: t('Statement period'), width: 420,
+        body: html`<p class="mb-3 text-sm text-muted">${t('Which entries should the statement show? It starts with the balance before that period.')}</p>
+          <div class="grid gap-2">${STATEMENT_PERIODS.map(([k, label, months]) => html`<button type="button" class="btn btn-outline h-12 justify-between" data-period="${k}"><span>${t(label)}</span><span class="text-xs text-muted">${count(fromOf(months))} ${t('entries')}</span></button>`)}</div>`,
+    });
+    ui.on(m.el, 'click', '[data-period]', (e, b) => {
+        const months = STATEMENT_PERIODS.find(x => x[0] === b.dataset.period)[2];
+        m.close();
+        printStatement(data, lang, { from: fromOf(months) });
+    });
+    return m;
+}
+
+HP.khata = { sendReminder, receiveDialog, promiseDialog, printStatement, statementDialog, messaging, typeLabel };
 
 // ───────── Khata Book ─────────
 HP.page('/khata', {
@@ -191,8 +212,15 @@ HP.page('/khata', {
 HP.page('/khata/c/:id', {
     title: 'Customer khata', perm: ['parties.manage', 'sales.create', 'finance.manage'],
     async render(el, { id }) {
-        let data, tab = 'ledger';
+        let data, tab = 'ledger', lq = '';
         const load = async () => { data = await api.get('/api/khata/customers/' + id); draw(); };
+        // ledger search: remark, reference, type, date or amount — over every entry, then the table pages the matches
+        const ledgerMatch = e => {
+            const s = lq.trim().toLowerCase(); if (!s) return true;
+            const num = s.replace(/[,\s]/g, '');
+            return [typeLabel(e.type, 'en'), typeLabel(e.type, 'ur'), e.refNo, e.note, fmt.date(e.date)].some(x => String(x || '').toLowerCase().includes(s))
+                || (/^\d+(\.\d+)?$/.test(num) && [e.debit, e.credit].some(v => v && String(v / 100).includes(num)));
+        };
         const party = () => ({ ...data.party, balance: data.balance });
         const draw = () => {
             const p = data.party;
@@ -206,13 +234,7 @@ HP.page('/khata/c/:id', {
               <div class="mb-4">${ui.tabs('tab', [['ledger', `Ledger / کھاتہ (${data.entries.length})`], ['promises', `Promises / وعدے (${data.promises.length})`], ['messages', `Messages (${data.messages.length})`]], tab)}</div>
               <div data-tab></div>`);
             const box = el.querySelector('[data-tab]');
-            if (tab === 'ledger') ui.mount(box, ui.table({ rows: [...data.entries].reverse(), empty: 'No khata entries yet.', columns: [
-                { label: 'Date', render: e => html`<span class="whitespace-nowrap">${fmt.dateTime(e.date)}</span>` },
-                { label: 'Details / تفصیل', render: e => html`<div class="font-medium">${typeLabel(e.type, 'en')} <span class="text-muted">· ${typeLabel(e.type, 'ur')}</span></div><div class="text-xs text-muted">${e.refNo}${e.note ? ' · ' + e.note : ''}</div>` },
-                { label: 'Udhaar (debit)', num: true, render: e => (e.debit ? html`<span class="text-warn">${fmt.money(e.debit)}</span>` : '') },
-                { label: 'Received (credit)', num: true, render: e => (e.credit ? html`<span class="text-good">${fmt.money(e.credit)}</span>` : '') },
-                { label: 'Balance', num: true, render: e => html`<b>${fmt.money(e.balance)}</b>` },
-            ] }));
+            if (tab === 'ledger') { ui.mount(box, html`${data.entries.length > 20 ? html`<div class="relative mb-3 max-w-sm"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span><input class="input ps-9" type="search" placeholder="${t('Search entries: remark, amount or date')}" data-lq value="${lq}"></div>` : ''}<div data-ledger></div>`); drawLedger(); }
             if (tab === 'promises') ui.mount(box, ui.table({ rows: data.promises, empty: 'No promises yet. Use "Add promise" when the customer says when they will pay.', columns: [
                 { label: 'Promised', render: x => html`<b>${fmt.money(x.amount)}</b>` }, { label: 'By', render: x => HP.wa.numericDate(x.promisedDate) },
                 { label: 'Status', render: x => promiseBadge(x) }, { label: 'Reminders', render: x => `${x.remindCount}${x.remindedAt ? ' · last ' + fmt.dateTime(x.remindedAt) : ''}` },
@@ -221,6 +243,18 @@ HP.page('/khata/c/:id', {
             ] }));
             if (tab === 'messages') ui.mount(box, messagesTable(data.messages, false));
         };
+        const drawLedger = () => {
+            const box = el.querySelector('[data-ledger]'); if (!box) return;
+            const rows = [...data.entries].reverse().filter(ledgerMatch);
+            ui.mount(box, ui.table({ rows, empty: data.entries.length ? t('Nothing matches.') : 'No khata entries yet.', columns: [
+                { label: 'Date', render: e => html`<span class="whitespace-nowrap">${fmt.dateTime(e.date)}</span>` },
+                { label: 'Details / تفصیل', render: e => html`<div class="font-medium">${typeLabel(e.type, 'en')} <span class="text-muted">· ${typeLabel(e.type, 'ur')}</span></div><div class="text-xs text-muted">${e.refNo}${e.note ? ' · ' + e.note : ''}</div>` },
+                { label: 'Udhaar (debit)', num: true, render: e => (e.debit ? html`<span class="text-warn">${fmt.money(e.debit)}</span>` : '') },
+                { label: 'Received (credit)', num: true, render: e => (e.credit ? html`<span class="text-good">${fmt.money(e.credit)}</span>` : '') },
+                { label: 'Balance', num: true, render: e => html`<b>${fmt.money(e.balance)}</b>` },
+            ] }));
+        };
+        el.addEventListener('input', e => { if (e.target.matches('[data-lq]')) { lq = e.target.value; drawLedger(); } });
         el.addEventListener('click', async e => {
             const b = e.target.closest('button,[data-v]'); if (!b) return;
             if (b.closest('[data-tabs]') && b.dataset.v) { tab = b.dataset.v; draw(); return; }
@@ -228,7 +262,7 @@ HP.page('/khata/c/:id', {
             if (b.dataset.prom !== undefined) return promiseDialog(party(), load);
             if (b.dataset.remind !== undefined) { const open = data.promises.find(x => x.status === 'PENDING' || x.status === 'OVERDUE'); return open ? sendReminder(party(), { kind: 'PROMISE_REMINDER', promise: open, onDone: load }) : sendReminder(party(), { kind: 'BALANCE_REMINDER', onDone: load }); }
             if (b.dataset.share !== undefined) return sendReminder(party(), { kind: 'STATEMENT', onDone: load });
-            if (b.dataset.print) return printStatement(data, b.dataset.print);
+            if (b.dataset.print) return statementDialog(data, b.dataset.print);
             const pid = b.dataset.premind || b.dataset.pedit || b.dataset.pkept || b.dataset.pbroken;
             if (pid) {
                 const pr = data.promises.find(x => x.id === pid);

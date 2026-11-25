@@ -465,10 +465,13 @@ router.post('/products/import', ADD, async (req, res) => {
 // ── the POS catalog: everything sellable, with stock, prices, units and category names ──
 router.get('/catalog', can('sales.create', 'purchases.manage', 'inventory.add', 'inventory.edit'), async (req, res) => {
     const t = req.user.tenantId;
-    const list = await prisma.product.findMany({ where: { tenantId: t, deletedAt: null, active: true, type: { not: 'VARIANT' } }, orderBy: { name: 'asc' } });
-    const maps = await namesMaps(t);
-    const levels = await stock.levels(t, list.map(p => p.id));
-    const serialCounts = await prisma.productSerial.groupBy({ by: ['productId'], where: { tenantId: t, deletedAt: null, status: 'IN_STOCK' }, _count: true });
+    // all four reads at once: stock levels of every product of the client (the list picks the ones it shows)
+    const [list, maps, levels, serialCounts] = await Promise.all([
+        prisma.product.findMany({ where: { tenantId: t, deletedAt: null, active: true, type: { not: 'VARIANT' } }, orderBy: { name: 'asc' } }),
+        namesMaps(t),
+        stock.levels(t),
+        prisma.productSerial.groupBy({ by: ['productId'], where: { tenantId: t, deletedAt: null, status: 'IN_STOCK' }, _count: true }),
+    ]);
     // cashiers do not see what the shop paid for goods
     const seeCost = ['inventory.add', 'inventory.edit', 'purchases.manage', 'reports.view'].some(k => Perms.has(req.user, k));
     res.json(list.map(p => { const v = { ...productView(p, maps, levels), serialsInStock: (serialCounts.find(s => s.productId === p.id) || {})._count || 0 }; if (!seeCost) delete v.cost; return v; }));

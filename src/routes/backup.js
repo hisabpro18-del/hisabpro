@@ -162,6 +162,7 @@ router.post('/import', MANAGE, bigJson, async (req, res) => {
         added[p.model] = p.fresh.length;
         skipped[p.model] = p.skipped;
     }
+    require('../services/settings').forget(t); // restored settings are read again
     const totalAdded = Object.values(added).reduce((a, n) => a + n, 0), totalSkipped = Object.values(skipped).reduce((a, n) => a + n, 0);
     await audit(req, { action: 'backup.import', summary: `Backup imported from "${String((b.tenant && b.tenant.name) || 'unknown shop').slice(0, 80)}": ${totalAdded} records added, ${totalSkipped} already present (skipped)` });
     res.json({ added, skipped, totalAdded, totalSkipped, source: { name: (b.tenant && b.tenant.name) || '', exportedAt: b.exportedAt || null } });

@@ -49,11 +49,13 @@ function printDebitNote(r) {
 HP.page('/purchases', {
     title: 'Purchases', perm: 'purchases.manage',
     async render(el, params, query) {
-        let list = [], q = '';
+        // the list is the newest CAP purchases; a search of a full list asks the server, so older ones are found too
+        const CAP = 2000;
+        let list = [], q = '', found = null;
         const draw = () => {
             const s = q.toLowerCase();
-            const rows = s ? list.filter(p => (p.number + ' ' + p.vendorName).toLowerCase().includes(s)) : list;
-            el.querySelector('[data-count]').textContent = `${rows.length} record${rows.length === 1 ? '' : 's'}`;
+            const rows = found || (s ? list.filter(p => (p.number + ' ' + p.vendorName).toLowerCase().includes(s)) : list);
+            el.querySelector('[data-count]').textContent = !q && list.length >= CAP ? t('Newest 2,000 — search to find older ones') : `${rows.length} record${rows.length === 1 ? '' : 's'}`;
             ui.mount(el.querySelector('[data-list]'), plainTable([
                 { label: 'PO Number', render: p => html`<button class="font-semibold text-accent hover:underline" data-view="${p.id}">${p.number}</button>` },
                 { label: 'Date', render: p => html`<span class="whitespace-nowrap">${fmt.date(p.date)}</span>` },
@@ -67,13 +69,19 @@ HP.page('/purchases', {
                     <button class="btn-icon !w-8 !h-8 border-0" data-more="${p.id}" aria-label="More actions for ${p.number}">${icon('dots')}</button></div>` },
             ], rows, list.length ? 'No purchases match your search.' : 'No purchases yet — create your first purchase order.'));
         };
-        const load = async () => { list = await api.get('/api/purchases'); draw(); };
+        const load = async () => { list = await api.get('/api/purchases'); found = null; if (q && list.length >= CAP) found = await api.get('/api/purchases', { q }); draw(); };
         ui.mount(el, html`${ui.pageHeader({ title: t('Purchases'), subtitle: 'Purchase orders, stock inwarding, and vendor payables', actions: html`<button class="btn btn-primary" data-new>${icon('plus')}Create Purchase Order</button>` })}
           <div class="card"><div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
             <div class="text-base font-semibold">Recent Purchases</div>
             <div class="flex items-center gap-3"><div class="relative w-64 max-w-full">${searchIcon()}<input class="input h-9 ps-9" placeholder="Search PO number or supplier…" data-q></div><span class="whitespace-nowrap text-sm text-muted" data-count></span></div></div>
             <div data-list>${ui.loading()}</div></div>`);
-        el.querySelector('[data-q]').addEventListener('input', e => { q = e.target.value; draw(); });
+        let tm;
+        el.querySelector('[data-q]').addEventListener('input', e => {
+            q = e.target.value; found = null;
+            clearTimeout(tm);
+            if (q.trim() && list.length >= CAP) tm = setTimeout(async () => { const want = q; const r = await api.get('/api/purchases', { q: want }).catch(ui.fail); if (r && want === q) { found = r; draw(); } }, 300);
+            draw();
+        });
         ui.on(el, 'click', '[data-new]', () => purchaseDrawer(load));
         ui.on(el, 'click', '[data-view]', (e, b) => viewPurchase(b.dataset.view, load));
         ui.on(el, 'click', '[data-pay]', (e, b) => payDrawer(list.find(p => p.id === b.dataset.pay), load));
@@ -323,13 +331,15 @@ async function payDrawer(p, onDone) {
 HP.page('/purchase-return', {
     title: 'Purchase Return', perm: 'purchases.manage',
     async render(el, params, query) {
-        let list = [], returns = [], q = '', selected = query.id || null, detail = null, accounts = [];
+        let list = [], returns = [], q = '', selected = query.id || null, detail = null, accounts = [], poShown = 100;
         const drawList = () => {
             const s = q.toLowerCase();
-            const rows = (s ? list.filter(p => (p.number + ' ' + p.vendorName).toLowerCase().includes(s)) : list).slice(0, 200);
+            const all = s ? list.filter(p => (p.number + ' ' + p.vendorName).toLowerCase().includes(s)) : list;
+            const rows = all.slice(0, poShown);
             ui.mount(el.querySelector('[data-polist]'), rows.length ? html`${rows.map(p => html`<button type="button" data-pick="${p.id}" class="flex w-full items-center justify-between gap-3 px-5 py-3 text-left ${p.id === selected ? 'bg-accent-soft' : 'hover:bg-surface-2'}">
                 <div class="min-w-0"><div class="font-semibold ${p.id === selected ? 'text-accent' : ''}">${p.number}</div><div class="truncate text-xs text-muted">${p.vendorName} · ${fmt.date(p.date)}</div></div>
-                <div class="text-right"><div class="text-sm font-medium tabular-nums">${fmt.money(p.total)}</div>${statusBadge(p.status)}</div></button>`)}`
+                <div class="text-right"><div class="text-sm font-medium tabular-nums">${fmt.money(p.total)}</div>${statusBadge(p.status)}</div></button>`)}
+                ${all.length > rows.length ? html`<button type="button" class="w-full px-5 py-3 text-center text-sm font-medium text-accent hover:bg-surface-2" data-po-more>${t('Show more')} (${all.length - rows.length})</button>` : ''}`
                 : html`<div class="px-5 py-12 text-center text-sm text-muted">No purchases found.</div>`);
         };
         const drawDetail = () => {
@@ -405,7 +415,8 @@ HP.page('/purchase-return', {
             <div class="card overflow-hidden" data-detail></div>
           </div>
           <div class="card mt-6"><div class="border-b border-line px-5 py-4"><div class="text-base font-semibold">Recent Debit Notes</div><div class="text-sm text-muted">Latest returns to suppliers</div></div><div data-returns>${ui.loading()}</div></div>`);
-        el.querySelector('[data-q]').addEventListener('input', e => { q = e.target.value; drawList(); });
+        el.querySelector('[data-q]').addEventListener('input', e => { q = e.target.value; poShown = 100; drawList(); });
+        ui.on(el, 'click', '[data-po-more]', () => { poShown += 100; drawList(); });
         ui.on(el, 'click', '[data-pick]', (e, b) => { selected = b.dataset.pick; history.replaceState({}, '', '/purchase-return?id=' + selected); drawList(); loadDetail(); });
         el.addEventListener('input', e => { if (e.target.matches('[data-rqty]')) calc(); });
         el.addEventListener('change', e => {

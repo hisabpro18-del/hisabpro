@@ -26,6 +26,7 @@ function toData(model, row) {
 // insert or update by id. lww: only overwrite when the incoming row is newer (server side). insertOnly: never update.
 // returns 'created' | 'updated' | 'skipped'
 async function upsertRow(db, model, data, { lww = false, tenantId, insertOnly = false } = {}) {
+    if (model === 'Setting') require('../services/settings').forget(data.tenantId || tenantId); // read it again next time
     const d = db[delegate(model)];
     const existing = await d.findUnique({ where: { id: data.id } });
     if (existing) {

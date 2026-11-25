@@ -659,8 +659,8 @@ HP.page('/reports/product-performance', {
         });
         ui.on(el, 'change', '[data-from],[data-to]', () => { const f = el.querySelector('[data-from]').value, to = el.querySelector('[data-to]').value; if (f && to) { range = { preset: 'custom', from: f, to }; load().catch(ui.fail); } });
         ui.on(el, 'change', '[data-cat]', (e, s) => { categoryId = s.value; redraw(); });
-        ui.on(el, 'input', '[data-q]', (e, i) => { q = i.value.trim().toLowerCase(); el.querySelector('[data-rows]').innerHTML = String(tableRows()); });
-        ui.on(el, 'click', '[data-sort]', (e, b) => { const k = b.dataset.sort; sort = sort.key === k ? { key: k, dir: -sort.dir } : { key: k, dir: -1 }; el.querySelector('[data-head]').innerHTML = String(head()); el.querySelector('[data-rows]').innerHTML = String(tableRows()); });
+        ui.on(el, 'input', '[data-q]', (e, i) => { q = i.value.trim().toLowerCase(); const tb = el.querySelector('[data-rows]'); tb.innerHTML = String(tableRows()); ui.repage(tb); });
+        ui.on(el, 'click', '[data-sort]', (e, b) => { const k = b.dataset.sort; sort = sort.key === k ? { key: k, dir: -sort.dir } : { key: k, dir: -1 }; el.querySelector('[data-head]').innerHTML = String(head()); const tb = el.querySelector('[data-rows]'); tb.innerHTML = String(tableRows()); ui.repage(tb); });
         ui.on(el, 'click', '[data-csv]', () => ui.csv(`product-performance-${data.range.fromDay}-to-${data.range.toDay}.csv`, ['Product', 'Category', 'Qty Sold', 'Avg Cost', 'Avg Price', 'Revenue', 'COGS', 'Net Profit', 'Margin %'],
             filtered().map(p => [p.name, p.category || 'Other', p.qty, R(p.avgCost), R(p.avgPrice), R(p.revenue), R(p.cogs), R(p.netProfit), p.margin])));
         await load();
@@ -768,7 +768,7 @@ HP.page('/reports/bill-profit', {
                 <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3"><div class="text-sm text-muted">${r.fromDay === r.toDay ? fmt.date(r.fromDay) : `${fmt.date(r.fromDay)} – ${fmt.date(r.toDay)}`} · ${t('click a bill for its items')}</div>
                   ${data.more ? html`<div class="text-xs text-warn">${t('Showing the latest 5,000 bills — choose a shorter period to see all.')}</div>` : ''}</div>
                 <div class="overflow-x-auto"><table class="tbl"><thead><tr>${th('number', 'Bill No')}${th('date', 'Date')}<th>${t('Customer')}</th>${th('sales', 'Sales Amount', true)}${th('cost', 'Purchase Cost', true)}${th('profit', 'Net Profit', true)}${th('margin', 'Margin', true)}</tr></thead>
-                  <tbody>${list.length ? list.slice(0, 1000).map(b => html`<tr class="cursor-pointer hover:bg-surface-2" data-bill="${b.id}">
+                  <tbody>${list.length ? list.map(b => html`<tr class="cursor-pointer hover:bg-surface-2" data-bill="${b.id}">
                       <td class="font-medium text-accent">${b.number}</td><td class="whitespace-nowrap">${fmt.dateTime(b.date)}</td>
                       <td>${b.customerName}${b.mode === 'CREDIT' ? html` <span class="text-[11px] text-warn">${t('udhaar')}</span>` : ''}</td>
                       <td class="num">${M(b.sales)}${b.returned ? html`<div class="text-[11px] text-muted">${t('returned')} ${M(b.returned)}</div>` : ''}</td>

@@ -184,6 +184,12 @@ router.get('/parties', MANAGE, async (req, res) => {
 router.get('/payments', MANAGE, async (req, res) => {
     const t = req.user.tenantId;
     const where = { tenantId: t, deletedAt: null };
+    // ?totals=1: money in / out over every payment (the list below stops at its newest 2000)
+    if (req.query.totals) {
+        const g = await prisma.payment.groupBy({ by: ['direction'], where, _sum: { amount: true }, _count: true });
+        const of = d => g.find(x => x.direction === d) || { _sum: {}, _count: 0 };
+        return res.json({ in: N(of('IN')._sum.amount), out: N(of('OUT')._sum.amount), count: of('IN')._count + of('OUT')._count });
+    }
     if (['IN', 'OUT'].includes(req.query.direction)) where.direction = req.query.direction;
     const q = str(req.query.q, 100);
     if (q) where.OR = [{ partyName: ci(q) }, { number: ci(q) }, { reference: ci(q) }];
