@@ -31,8 +31,8 @@ const DEFAULTS = {
         balanceEn: 'Dear {name},\n\nYour balance in the {shop} khata is {balance}.\n\nPlease clear it at your earliest convenience.\nContact: {phone}\n{shop}',
         thanksUr: 'محترم {name} 🌹\n\n{shop} میں آپ کی {amount} کی ادائیگی وصول ہو گئی۔ ✅\n\n💰 باقی بقایا: {balance}\n\nشکریہ! 🙏\n{shop}',
         thanksEn: 'Dear {name},\n\nWe have received your payment of {amount} at {shop}. Thank you!\n\nRemaining balance: {balance}\n{shop}',
-        billUr: 'محترم {name} 🌹\n\n{shop} سے آپ کا بل {number}\n\n{items}\n\n🧾 کل رقم: {total}\n✅ ادا شدہ: {paid}\n📌 بقایا: {due}\n\n💰 کل کھاتہ: {balance}\n\nشکریہ! 🙏',
-        billEn: 'Dear {name},\n\nYour bill {number} from {shop}\n\n{items}\n\nTotal: {total}\nPaid: {paid}\nDue: {due}\n\nKhata balance: {balance}\n\nThank you!',
+        billUr: 'محترم {name} 🌹\n\n{shop} سے آپ کا بل {number}\n🧾 کل رقم: {total}\n✅ ادا شدہ: {paid}\n📌 بقایا: {due}\n\n{items}\n\n💰 کل کھاتہ: {balance}\n\nشکریہ! 🙏',
+        billEn: 'Dear {name},\n\nYour bill {number} from {shop}\nTotal: {total}\nPaid: {paid}\nDue: {due}\n\n{items}\n\nKhata balance: {balance}\n\nThank you!',
     },
 };
 const KEYS = Object.keys(DEFAULTS);

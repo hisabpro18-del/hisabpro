@@ -50,8 +50,9 @@ async function sendReminder(party, { kind = 'BALANCE_REMINDER', promise = null, 
         const tpl = m[key + (lang === 'ur' ? 'Ur' : 'En')];
         if (key !== 'bill' || /\{items\}/.test(tpl)) return tpl;
         const lines = String(tpl || '').split('\n');
-        const at = lines.findIndex(l => l.includes('{number}'));
-        lines.splice(at < 0 ? lines.length : at + 1, 0, '', '{items}', '');
+        // after the totals, so a long list can never push the total / due out of a message
+        const last = lines.reduce((a, l, i) => (/\{(due|paid|total)\}/.test(l) ? i : a), lines.findIndex(l => l.includes('{number}')));
+        lines.splice(last < 0 ? lines.length : last + 1, 0, '', '{items}', '');
         return lines.join('\n');
     };
     // extra may depend on the language chosen in the dialog (the item lines of a bill)
@@ -68,7 +69,8 @@ async function sendReminder(party, { kind = 'BALANCE_REMINDER', promise = null, 
         footer: html`${slip && app ? html`<button class="btn btn-outline me-auto" data-shareslip>${icon('image')}${t('Share slip picture')}</button>` : ''}<button class="btn btn-outline" data-close>${t('Cancel')}</button><button class="btn btn-outline" data-sms ${m.smsEnabled ? '' : raw('disabled')}>${icon('receipt')}Send SMS</button><button class="btn btn-primary" data-wa>${icon('arrowRight')}WhatsApp</button>`,
     });
     // the picture is made while the dialog is open, so the WhatsApp click is quick
-    const picture = slip ? slip().catch(() => null) : null;
+    let pictureBlob = null;
+    const picture = slip ? slip().then(b => (pictureBlob = b)).catch(() => null) : null;
     const ta = d.el.querySelector('[data-text]');
     d.el.addEventListener('click', async e => {
         const s = e.target.closest('[data-seg=lang] [data-v]');
@@ -85,17 +87,19 @@ async function sendReminder(party, { kind = 'BALANCE_REMINDER', promise = null, 
             const box = d.el.querySelector('[data-slip]');
             if (box) {
                 slipPref(box.checked);
-                if (box.checked) {
-                    const blob = await picture;
-                    try { if (!blob) throw new Error(); await HP.native.copyImage(blob); ui.toast(t('Bill slip picture copied: in the WhatsApp chat press Ctrl+V, then send.')); }
+                // only a picture that is already made is copied: the chat must open from the click itself (a browser blocks
+                // a tab or app opened after a long wait)
+                if (box.checked && pictureBlob) {
+                    try { await HP.native.copyImage(pictureBlob); ui.toast(t('Bill slip picture copied: in the WhatsApp chat press Ctrl+V, then send.')); }
                     catch { ui.toast(t('The slip picture could not be copied. Use Picture on the bill to save it.'), 'error'); }
-                }
+                } else if (box.checked) ui.toast(t('The slip picture is not ready yet: use Picture on the bill to copy it.'), 'info');
             }
             if (!HP.wa.open(phone, text)) return;
             api.post('/api/khata/messages/log', { partyId: party.id || null, kind, to: phone, body: text, refId: refId || (promise && promise.id) }).then(() => onDone && onDone()).catch(() => {});
             d.close();
         }
         if (e.target.closest('[data-sms]')) {
+            if (ta.value.trim().length > 1000) return ui.toast(t('This message is too long for an SMS (1,000 letters at most). Send it on WhatsApp, or shorten it.'), 'error');
             try {
                 const r = await api.post('/api/khata/messages/sms', { partyId: party.id || null, to: d.el.querySelector('[data-phone]').value.trim(), kind, body: ta.value.trim(), refId: refId || (promise && promise.id) });
                 ui.toast(r.status === 'SENT' ? 'SMS sent' : r.status === 'LOGGED' ? 'SMS logged (test mode)' : r.status === 'QUEUED' ? 'SMS queued: it is sent when this PC is online' : `SMS failed: ${r.error}`, r.status === 'FAILED' ? 'error' : 'ok');

@@ -14,13 +14,19 @@ const hasStock = p => p.type !== 'SERVICE' && p.type !== 'SERIAL';
 const matches = (p, q) => !q || [p.name, p.sku, p.barcode].some(v => String(v || '').toLowerCase().includes(q));
 const byName = (a, b) => a.name.localeCompare(b.name);
 
-// save in parts of 400 products (one server transaction each), all under one batch id in the history
-async function saveChanges(changes, { reason = 'ADJUSTMENT', note = '' } = {}) {
-    const batchId = uuid();
+// save in parts of 400 products (one server transaction each), all under one batch id. The dialog keeps its batch id,
+// so when a later part fails and Apply is pressed again, the server skips the products that part 1 already changed
+// (an Increase by 10 is never applied twice).
+async function saveChanges(changes, { reason = 'ADJUSTMENT', note = '', batchId = uuid() } = {}) {
     let updated = 0;
     for (let i = 0; i < changes.length; i += 400) {
-        const r = await api.post('/api/inventory/stock-price/save', { changes: changes.slice(i, i + 400), reason, note, batchId });
-        updated += r.updated;
+        try {
+            const r = await api.post('/api/inventory/stock-price/save', { changes: changes.slice(i, i + 400), reason, note, batchId });
+            updated += r.updated;
+        } catch (err) {
+            if (i) err.message = `${err.message} ${i} of ${changes.length} products were saved; press Apply again to finish the rest.`;
+            throw err;
+        }
     }
     return updated;
 }
@@ -125,6 +131,7 @@ HP.page('/stock-price', {
                 footer: html`<button class="btn btn-outline" data-close>${t('Cancel')}</button><button class="btn btn-primary" data-apply>${icon('check')}${t('Apply')}</button>`,
             });
             const form = d.el.querySelector('[data-form]');
+            const batchId = uuid();
             const plan = () => {
                 const scope = radio(form, 'scope'), method = form.querySelector('[name=method]').value, v = Number(form.querySelector('[name=value]').value), round = Number(form.querySelector('[name=round]').value);
                 const valueNeeded = method !== 'CLEAR';
@@ -164,7 +171,7 @@ HP.page('/stock-price', {
                 if (!(await ui.confirm({ title: `${t(`Update ${FIELDS[field]}`)}: ${r.out.length} ${t('products')}?`, message: t('The new prices are used by the POS at once. Every change is kept in the history.'), ok: t('Update prices') }))) return;
                 e.target.disabled = true;
                 try {
-                    const n = await saveChanges(r.out.map(x => ({ productId: x.p.id, [field]: x.next })), { note: form.querySelector('[name=note]').value });
+                    const n = await saveChanges(r.out.map(x => ({ productId: x.p.id, [field]: x.next })), { note: form.querySelector('[name=note]').value, batchId });
                     d.close(); ui.toast(`${t(FIELDS[field])}: ${n} ${t('products updated')}`); await reload();
                 } catch (err) { e.target.disabled = false; ui.fail(err); }
             });
@@ -185,6 +192,7 @@ HP.page('/stock-price', {
             });
             const form = d.el.querySelector('[data-form]');
             let op = 'ADD';
+            const batchId = uuid();
             const reasonFor = { ADD: 'PURCHASE', REMOVE: 'DAMAGED', SET: 'ADJUSTMENT' };
             form.querySelector('[name=reason]').value = reasonFor[op];
             const plan = () => {
@@ -209,7 +217,7 @@ HP.page('/stock-price', {
                 if (!one && !(await ui.confirm({ title: `${t('Update Stock')}: ${r.out.length} ${t('products')}?`, message: t('Stock changes at once in inventory and on the POS. Every change is kept in the history.'), ok: t('Update stock') }))) return;
                 e.target.disabled = true;
                 try {
-                    const n = await saveChanges(r.out.map(x => ({ productId: x.p.id, stock: { op, qty: r.qty } })), { reason: form.querySelector('[name=reason]').value, note: form.querySelector('[name=note]').value });
+                    const n = await saveChanges(r.out.map(x => ({ productId: x.p.id, stock: { op, qty: r.qty } })), { reason: form.querySelector('[name=reason]').value, note: form.querySelector('[name=note]').value, batchId });
                     d.close(); ui.toast(`${t('Stock')}: ${n} ${t('products updated')}`); await reload();
                 } catch (err) { e.target.disabled = false; ui.fail(err); }
             });
@@ -228,12 +236,13 @@ HP.page('/stock-price', {
                     ${ui.field({ label: 'Note (kept in the history)', name: 'note', half: !!stockN, placeholder: 'optional' })}</form>`,
                 footer: html`<button class="btn btn-outline" data-close>${t('Cancel')}</button><button class="btn btn-primary" data-apply>${icon('check')}${t('Save All Changes')}</button>`,
             });
+            const batchId = uuid();
             d.el.querySelector('[data-apply]').addEventListener('click', async e => {
                 const form = d.el.querySelector('[data-form]');
                 e.target.disabled = true;
                 try {
                     const changes = ids.map(id => { const x = edits[id]; const c = { productId: id }; for (const k of Object.keys(FIELDS)) if (x[k] !== undefined) c[k] = x[k]; if (x.stock !== undefined) c.stock = { op: 'SET', qty: x.stock }; return c; });
-                    const n = await saveChanges(changes, { reason: form.querySelector('[name=reason]') ? form.querySelector('[name=reason]').value : 'ADJUSTMENT', note: form.querySelector('[name=note]').value });
+                    const n = await saveChanges(changes, { reason: form.querySelector('[name=reason]') ? form.querySelector('[name=reason]').value : 'ADJUSTMENT', note: form.querySelector('[name=note]').value, batchId });
                     for (const id of ids) delete edits[id];
                     d.close(); ui.toast(`${n} ${t('products updated')}`); await reload();
                 } catch (err) { e.target.disabled = false; ui.fail(err); }

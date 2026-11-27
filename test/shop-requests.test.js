@@ -136,6 +136,28 @@ test('shop requests: wholesale per line, stock & price, payments, search, dashbo
         assert.equal(full.data.customerPhone, '0300-7654321');
     });
 
+    await t.test('review fixes: a resent batch is not applied twice; invoice numbers do not match phones; back-dated receipts agree', async () => {
+        const batchId = require('crypto').randomUUID();
+        const body = { batchId, reason: 'PURCHASE', changes: [{ productId: soap, stock: { op: 'ADD', qty: 5 } }] };
+        const before = (await h.get('/api/inventory/stock-price')).data.products.find(x => x.id === soap).stock;
+        assert.equal((await h.post('/api/inventory/stock-price/save', body)).data.updated, 1);
+        assert.equal((await h.post('/api/inventory/stock-price/save', body)).data.updated, 0); // Apply pressed again
+        assert.equal((await h.get('/api/inventory/stock-price')).data.products.find(x => x.id === soap).stock, before + 5);
+        // "INV-0001" has digits but is not a phone number: only the invoice itself
+        const other = (await h.post('/api/parties', { type: 'CUSTOMER', name: 'Zia', phone: '0333-4440001' })).data;
+        await h.post('/api/pos/sales', { mode: 'CREDIT', customerId: other.id, items: [{ productId: soap, qty: 1 }], payments: [] });
+        const byNumber = (await h.get('/api/pos/sales?q=INV-0001')).data.sales;
+        assert.deepEqual(byNumber.map(x => x.number), ['INV-0001']);
+        assert.ok((await h.get('/api/pos/sales?q=' + encodeURIComponent('+92 333 444'))).data.sales.every(x => x.customerId === other.id));
+        assert.equal((await h.get('/api/pos/sales?q=920')).data.sales.length, 0);
+        // a payment dated before a later sale: the receipt on save and the reprint show the same balances
+        const back = await h.post('/api/finance/payments', { direction: 'IN', partyId: other.id, amount: 1000, method: 'CASH', date: new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 10) });
+        assert.equal(back.status, 200, JSON.stringify(back.data));
+        const again = (await h.get('/api/finance/payments/' + back.data.id)).data;
+        assert.deepEqual([back.data.balanceBefore, back.data.balance], [again.balanceBefore, again.balance]);
+        assert.deepEqual([again.balanceBefore, again.balance], [0, -1000]);
+    });
+
     await t.test('dashboard Show Details: an owner password opens it; a wrong one is a 400 (not a sign-out)', async () => {
         const manager = await h.user('MANAGER', ['reports.view']);
         assert.equal((await h.post('/api/auth/unlock', { password: 'User@12345' }, manager)).status, 400); // the manager's own password is not the admin's
@@ -150,6 +172,9 @@ test('shop requests: wholesale per line, stock & price, payments, search, dashbo
     await t.test('settings: the shop WhatsApp number is saved and checked; receipt toggles exist', async () => {
         assert.equal((await h.put('/api/settings/company', { whatsapp: '0300-1234567' })).status, 200);
         assert.equal((await h.put('/api/settings/company', { whatsapp: '12' })).status, 400);
+        assert.equal((await h.put('/api/settings/company', { whatsapp: '042-3576123' })).status, 400); // a landline has no WhatsApp
+        assert.equal((await h.put('/api/settings/company', { whatsapp: '+971 50 123 4567' })).status, 200);
+        assert.equal((await h.put('/api/settings/company', { whatsapp: '0300-1234567' })).status, 200);
         const s = (await h.get('/api/settings')).data;
         assert.equal(s.company.whatsapp, '0300-1234567');
         assert.equal(s.receipt.showBarcode, false);

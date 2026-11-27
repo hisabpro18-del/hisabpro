@@ -80,6 +80,7 @@
         if (!raw) return '';
         const pk = HP.wa && HP.wa.number(raw);
         if (pk) return pk;
+        if (!/^\s*(\+|00)/.test(raw)) return ''; // without a country code wa.me cannot open the chat
         const d = raw.replace(/\D/g, '').replace(/^00/, '');
         return d.length >= 10 && d.length <= 15 ? d : '';
     }

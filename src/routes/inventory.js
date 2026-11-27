@@ -543,6 +543,8 @@ router.post('/stock-price/save', EDIT, async (req, res) => {
     const sums = { RETAIL: 0, WHOLESALE: 0, COST: 0, STOCK: 0 };
     const result = await withTx(t, async tx => {
         const products = await tx.product.findMany({ where: { tenantId: t, deletedAt: null, id: { in: [...new Set(changes.map(c => c.productId))] } } });
+        // a resend of a batch (Apply pressed again after a later part failed) skips the products it already changed
+        const done = new Set((await tx.stockPriceLog.findMany({ where: { tenantId: t, batchId, productId: { in: products.map(p => p.id) } }, select: { productId: true } })).map(r => r.productId));
         const byId = Object.fromEntries(products.map(p => [p.id, p]));
         const stockIds = changes.filter(c => c.stock).map(c => c.productId);
         const lv = stockIds.length ? await stock.levels(t, stockIds, tx) : {};
@@ -553,6 +555,7 @@ router.post('/stock-price/save', EDIT, async (req, res) => {
             const p = byId[c.productId];
             if (!p) throw new HttpError(400, 'A product in the list no longer exists. Reload the page and try again.');
             if (p.type === 'VARIANT') throw new HttpError(400, `"${p.name}": change each colour / size separately.`);
+            if (done.has(p.id)) continue;
             const data = {};
             for (const [k] of PRICE_FIELDS) if (c[k] !== undefined && (c[k] === null ? p[k] !== null : p[k] === null || N(p[k]) !== c[k])) data[k] = c[k] === null ? null : B(c[k]);
             const plog = priceLogs(p, Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v === null ? null : N(v)])), { tenantId: t, user: req.user, note, batchId, date });

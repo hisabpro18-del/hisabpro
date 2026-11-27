@@ -77,7 +77,7 @@ HP.page('/pos', {
             const list = filtered();
             left.innerHTML = String(html`<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <h1 class="text-2xl font-bold">${t('POS Terminal')}</h1>
-                <div class="flex flex-wrap items-center gap-2">${ui.seg('price', [['RETAIL', 'Retail price'], ['WHOLESALE', 'Wholesale price']], P.wholesale ? 'WHOLESALE' : 'RETAIL')}${ui.seg('view', [['VISUAL', 'Visual / Touch'], ['RETAIL', 'Retail / Barcode']], P.view)}
+                <div class="flex flex-wrap items-center gap-2">${ui.seg('price', [['RETAIL', 'Retail price'], ['WHOLESALE', 'Wholesale price']], billMode())}${ui.seg('view', [['VISUAL', 'Visual / Touch'], ['RETAIL', 'Retail / Barcode']], P.view)}
                   <button class="btn btn-outline" data-held>${t('View Held Sales')}</button></div></div>
               <div class="relative mb-3"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span>
                 <input class="input h-11 ps-9 pe-12" placeholder="${t('Search / Barcode / Formula — 24*code adds 24')}" data-search value="${q}" autocomplete="off">${HP.native && HP.native.isApp() ? html`<button type="button" class="btn-icon absolute end-1 top-1 !h-9 !w-9 border-0" data-camscan aria-label="${t('Scan with camera')}" title="${t('Scan with camera')}">${icon('camera')}</button>` : html`<span class="kbd absolute end-3 top-3">F1</span>`}</div>
@@ -155,6 +155,8 @@ HP.page('/pos', {
                 <button class="btn btn-outline h-14 !whitespace-normal leading-tight" data-estimate ${has ? '' : raw('disabled')}>Print<br>Estimate</button>
                 <button class="btn btn-primary h-14 text-base" data-charge ${has && !busy ? '' : raw('disabled')}>${busy ? ui.spinner('w-5 h-5 text-white') : ''}${t('Charge')} ${fmt.money(tt.total)}<span class="kbd ms-1 !bg-white/20 !text-white !border-white/30">F9</span></button>
               </div>`);
+            // the price switch above the products shows the same as the bill's (a wholesale customer, W buttons)
+            left.querySelectorAll('[data-seg=price] button').forEach(b => b.classList.toggle('on', b.dataset.v === billMode()));
             // the right panel is redrawn on every keystroke in an amount box: drop the old suggestion list first
             if (custAc) { custAc.destroy(); custAc = null; }
             const ci = right.querySelector('[data-cust]');
@@ -378,7 +380,7 @@ HP.page('/pos', {
                 if (r) {
                     if (cart.lines.length && !(await ui.confirm({ title: 'Replace the current cart?', message: 'The cart on screen will be cleared.', ok: 'Resume held sale' }))) return;
                     const h = list.find(z => z.id === r.dataset.resume);
-                    try { await api.del('/api/pos/held/' + h.id); cart = normalize({ ...fresh(), ...h.cart, clientId: uuid() }); d.close(); draw(); if (cart.customer) loadLastPrices(cart.customer.id); } catch (err) { ui.fail(err); }
+                    try { await api.del('/api/pos/held/' + h.id); cart = normalize({ ...fresh(), priceMode: undefined, ...h.cart, clientId: uuid() }); repriceAll(); d.close(); draw(); if (cart.customer) loadLastPrices(cart.customer.id); } catch (err) { ui.fail(err); }
                 }
                 if (x) {
                     if (!(await ui.confirm({ title: 'Delete this held sale?', message: 'Its items are thrown away. This cannot be undone.', ok: 'Delete', danger: true }))) return;
@@ -425,6 +427,7 @@ HP.page('/pos', {
             if (list.length === 1) { pick(list[0]); return true; }
             // several products match what was typed: the first is picked out; ↓ ↑ choose another, Enter adds it
             if (fromBox && list.length > 1) {
+                pendingQty = null; // Enter on the picked one reads the "24*" from the box again
                 hi = 0; refreshProducts();
                 ui.toast(`${list.length} ${t('products match: choose with ↓ ↑ and press Enter')}`, 'info');
                 return false;
@@ -503,7 +506,7 @@ HP.page('/pos', {
                 left.querySelector('[data-hi]')?.scrollIntoView({ block: 'nearest' });
                 return;
             }
-            if (e.key === 'Escape' && (q || hi >= 0)) { e.preventDefault(); clear(); return; }
+            if (e.key === 'Escape') { pendingQty = null; if (q || hi >= 0) { e.preventDefault(); clear(); } return; }
             if (e.key !== 'Enter') return;
             e.preventDefault();
             const list = filtered();

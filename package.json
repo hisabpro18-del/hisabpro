@@ -1,6 +1,6 @@
 {
   "name": "hisabpro",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "description": "HisabPro — multi-tenant POS with khata, inventory, finance and HRM; web + offline Windows desktop app with sync",
   "main": "desktop/main.js",

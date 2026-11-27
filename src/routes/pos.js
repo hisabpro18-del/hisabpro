@@ -265,11 +265,14 @@ router.get('/sales', VIEW, async (req, res) => {
     if (q) {
         // invoice number, customer name, or part of the customer's mobile (0300-1234567 / 03001234567 / 1234567 all match)
         where.OR = [{ number: ci(q) }, { customerName: ci(q) }];
+        // only a query made of digits (and + - spaces) is a phone number: "INV-1023" must not find phones with 1023 in them.
+        // Both sides drop a leading 0 / 92 / 0092 before a mobile's 3, so 0300…, 92300… and +92 300… all match.
         const digits = q.replace(/\D/g, '');
-        if (digits.length >= 3) {
-            const tail = digits.replace(/^(0092|92|0)/, '');
+        if (/^[\d\s+()-]+$/.test(q) && digits.length >= 4) {
+            const local = d => d.replace(/^(0092|92|0)(?=3)/, '');
+            const want = local(digits);
             const phones = await prisma.party.findMany({ where: { tenantId: t, type: 'CUSTOMER', deletedAt: null, phone: { not: '' } }, select: { id: true, phone: true } });
-            const ids = phones.filter(p => String(p.phone).replace(/\D/g, '').includes(tail || digits)).map(p => p.id);
+            const ids = phones.filter(p => local(String(p.phone).replace(/\D/g, '')).includes(want)).map(p => p.id);
             if (ids.length) where.OR.push({ customerId: { in: ids.slice(0, 5000) } });
         }
     }

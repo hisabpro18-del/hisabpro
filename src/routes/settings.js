@@ -39,9 +39,10 @@ const READ = {
         if (has(b, 'address')) o.address = str(b.address, 300);
         if (has(b, 'logo')) o.logo = readLogo(b.logo);
         if (has(b, 'whatsapp')) {
+            // the receipt QR opens wa.me/<number>: it needs a mobile (0300-1234567) or a number with its country code (+971 …)
             o.whatsapp = str(b.whatsapp, 30);
             const d = o.whatsapp.replace(/\D/g, '');
-            if (o.whatsapp && (d.length < 10 || d.length > 15)) throw new HttpError(400, 'Enter the WhatsApp number like 0300-1234567 or +92 300 1234567.');
+            if (o.whatsapp && !require('../services/sms').msisdn(o.whatsapp) && !(/^\s*(\+|00)/.test(o.whatsapp) && d.length >= 10 && d.length <= 17)) throw new HttpError(400, 'Enter the WhatsApp mobile number like 0300-1234567 (or +971 50 123 4567 outside Pakistan).');
         }
         return o;
     },

@@ -55,7 +55,12 @@ async function boot() {
     win.once('ready-to-show', () => { if (process.env.HP_HIDDEN) return; win.maximize(); win.show(); });
     // links to other sites open in the normal browser, never inside the app; whatsapp: links open WhatsApp Desktop
     // (chosen in the WhatsApp dialog as "WhatsApp app")
-    win.webContents.setWindowOpenHandler(({ url }) => { if (/^(https?|whatsapp):/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+    win.webContents.setWindowOpenHandler(({ url }) => {
+        if (/^https?:/.test(url)) shell.openExternal(url).catch(() => {});
+        // no WhatsApp Desktop on this PC: the same chat opens in WhatsApp Web
+        else if (/^whatsapp:\/\/send\?/.test(url)) shell.openExternal(url).catch(() => shell.openExternal('https://web.whatsapp.com/send?' + url.slice(url.indexOf('?') + 1)).catch(() => {}));
+        return { action: 'deny' };
+    });
     // compared by origin: a prefix test would let http://127.0.0.1:<port>@other.site or port <port>5 load inside the app
     const own = `http://127.0.0.1:${port}`;
     const originOf = u => { try { return new URL(u).origin; } catch { return ''; } };
