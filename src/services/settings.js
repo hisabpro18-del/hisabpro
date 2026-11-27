@@ -11,8 +11,11 @@ const DEFAULTS = {
         // thermal receipt: the invoice-number barcode at the end (off: shops asked for it to go), and a QR code that opens
         // the shop's WhatsApp chat (printed only once Company Profile → WhatsApp number is filled in)
         showBarcode: false, showWhatsappQr: true,
-        // thermal print text: bold (darker on the paper) and its size in px
-        thermalBold: true, thermalSize: 13,
+        // thermal print text: thin, with the product names bold (boldText: every line bold instead) and its size in px.
+        // (New names: 1.0.6 saved thermalBold / thermalSize as all-bold 13 px, which shops did not want.)
+        boldText: false, textSize: 12,
+        showShopName: true, // off when the logo already shows the name (only hidden while a logo is printed)
+        logoSize: 'M', // logo on thermal receipts: S | M | L
     },
     numbering: {
         invoicePrefix: 'INV-', purchasePrefix: 'PUR-',

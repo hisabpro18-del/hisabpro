@@ -360,7 +360,12 @@
         // thermal slips (58 / 80 mm): 4 mm side margins — about what a thermal head cannot print anyway — instead of the
         // 6 mm of A4 pages, which made the 72 mm slip wider than the page so it was shrunk (thinner text). A4 invoices and
         // reports keep their margins.
-        if (root.querySelector('.receipt.w58, .receipt.w80') && !root.querySelector('.receipt.a4')) root.insertAdjacentHTML('afterbegin', '<style>@page { margin: 2mm 4mm; }</style>');
+        if (root.querySelector('.receipt.w58, .receipt.w80') && !root.querySelector('.receipt.a4')) {
+            // … and every slip follows Receipt & POS → Thermal print text / size (bills and payment receipts set it themselves)
+            const rc = (HP.session && HP.session.settings && HP.session.settings.receipt) || {};
+            const size = Math.min(14, Math.max(12, Number(rc.textSize) || 12));
+            root.insertAdjacentHTML('afterbegin', `<style>@page { margin: 2mm 4mm; } .receipt.w58, .receipt.w80 { font-size: ${size}px;${rc.boldText === true ? ' font-weight: 700;' : ''} }</style>`);
+        }
         // let barcodes / images render before printing
         const silent = window.hpDesktop && HP.session && HP.session.settings && HP.session.settings.receipt && HP.session.settings.receipt.autoPrint;
         setTimeout(() => { if (HP.ui.afterPrintRender) HP.ui.afterPrintRender(root); setTimeout(() => (HP.native && HP.native.isApp() ? HP.native.print(root) : silent ? silentPrint() : window.print()), 150); }, 50);

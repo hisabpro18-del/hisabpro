@@ -59,7 +59,7 @@
         const box = document.createElement('div');
         box.style.cssText = 'position:fixed;left:-20000px;top:0;background:#fff;pointer-events:none';
         const clone = el.cloneNode(true);
-        clone.style.fontFamily = MONO; clone.style.fontWeight = '500';
+        clone.style.fontFamily = MONO; clone.style.fontWeight = String(Math.max(500, Number(clone.style.fontWeight) || 400));
         box.appendChild(clone); document.body.appendChild(box);
         try {
             const w = Math.max(1, clone.offsetWidth);

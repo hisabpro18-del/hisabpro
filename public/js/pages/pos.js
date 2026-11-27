@@ -12,6 +12,7 @@ let posDraft = null;
 HP.page('/pos', {
     title: 'POS Terminal', perm: 'sales.create',
     async render(el) {
+        if (HP.receipt && HP.receipt.warm) HP.receipt.warm();
         const [boot, catalog] = await Promise.all([api.get('/api/pos/bootstrap'), api.get('/api/inventory/catalog')]);
         const P = prefs();
         if (P.wholesale === undefined) P.wholesale = !!(boot.pos && boot.pos.wholesaleMode);

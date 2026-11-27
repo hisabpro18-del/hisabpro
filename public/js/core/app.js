@@ -139,7 +139,7 @@
         }
         if (desktop && !desktop.activated) return showActivation();
         if (!api.token()) return showLogin();
-        try { HP.session = await api.get('/api/auth/me'); }
+        try { HP.session = await api.get('/api/auth/me'); if (HP.receipt && HP.receipt.warm) HP.receipt.warm(); }
         catch (e) {
             if (e.status === 401) return showLogin(e.message);
             app().innerHTML = String(centered(html`<p class="text-sm">${e.message}</p><button class="btn btn-primary mt-4" data-retry>Try again</button>`));
@@ -179,7 +179,7 @@
         await start();
     }
     // reload the session (after settings change the shop name / logo)
-    async function refresh() { HP.session = await api.get('/api/auth/me'); HP.shell.render(location.pathname); }
+    async function refresh() { HP.session = await api.get('/api/auth/me'); if (HP.receipt && HP.receipt.warm) HP.receipt.warm(); HP.shell.render(location.pathname); }
 
     HP.app = { start, home, signOut, signedOut, openWorkspace, backToAdmin, refresh, desktop: () => desktop };
     document.addEventListener('DOMContentLoaded', start);

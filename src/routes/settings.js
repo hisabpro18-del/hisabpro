@@ -53,12 +53,13 @@ const READ = {
         if (has(b, 'template')) o.template = oneOf(b.template, ['STANDARD', 'COMPACT', 'SUPERMARKET'], 'Visual template');
         if (has(b, 'brandColor')) { o.brandColor = str(b.brandColor, 9); if (!/^#[0-9a-fA-F]{6}$/.test(o.brandColor)) throw new HttpError(400, 'Brand color must look like #4F46E5.'); o.brandColor = o.brandColor.toUpperCase(); }
         if (has(b, 'font')) o.font = oneOf(b.font, ['Inter', 'Roboto', 'Georgia', 'Times New Roman'], 'Typography');
-        for (const k of ['showLogo', 'showTaxId', 'showCustomer', 'showMrp', 'showSavings', 'amountInWords', 'showTerms', 'showQr', 'showPrevBalance', 'showBank', 'showCashier', 'showSignature', 'autoPrint', 'showBarcode', 'showWhatsappQr']) if (has(b, k)) o[k] = bool(b[k]);
+        for (const k of ['showLogo', 'showTaxId', 'showCustomer', 'showMrp', 'showSavings', 'amountInWords', 'showTerms', 'showQr', 'showPrevBalance', 'showBank', 'showCashier', 'showSignature', 'autoPrint', 'showBarcode', 'showWhatsappQr', 'showShopName']) if (has(b, k)) o[k] = bool(b[k]);
         if (has(b, 'qrType')) o.qrType = oneOf(b.qrType, ['STANDARD', 'PAYMENT', 'TAX'], 'QR Code Type');
         if (has(b, 'copies')) { const n = num(b.copies, 'Default Print Copies', { min: 1, max: 3, allowEmpty: false }); if (!Number.isInteger(n)) throw new HttpError(400, 'Default Print Copies must be 1, 2 or 3.'); o.copies = n; }
         if (has(b, 'bankDetails')) o.bankDetails = str(b.bankDetails, 500);
-        if (has(b, 'thermalBold')) o.thermalBold = bool(b.thermalBold);
-        if (has(b, 'thermalSize')) o.thermalSize = Number(oneOf(String(b.thermalSize), ['12', '13', '14'], 'Thermal text size'));
+        if (has(b, 'boldText')) o.boldText = bool(b.boldText);
+        if (has(b, 'logoSize')) o.logoSize = oneOf(String(b.logoSize).toUpperCase(), ['S', 'M', 'L'], 'Logo size');
+        if (has(b, 'textSize')) o.textSize = Number(oneOf(String(b.textSize), ['12', '13', '14'], 'Thermal text size'));
         return o;
     },
     numbering(b) {

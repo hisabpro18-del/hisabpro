@@ -33,7 +33,7 @@
         if (a4) {
             return html`<div class="receipt a4" style="${font}">
               <div style="display:flex;justify-content:space-between;align-items:flex-start;border-top:6px solid ${brand};padding-top:12px">
-                <div style="display:flex;gap:12px;align-items:center">${r.showLogo && c.logo ? html`<img src="${c.logo}" style="height:64px;max-width:120px;object-fit:contain" alt="">` : ''}
+                <div style="display:flex;gap:12px;align-items:center">${r.showLogo && c.logo ? html`<img src="${logoSrc(c.logo)}" style="height:64px;max-width:120px;object-fit:contain" alt="">` : ''}
                   <div><div style="font-size:22px;font-weight:700">${shopName}</div><div>${c.address || ''}</div><div>${c.phone ? 'Tel: ' + c.phone : ''}${c.email ? ' · ' + c.email : ''}</div>${r.showTaxId && c.taxId ? html`<div>NTN: ${c.taxId}</div>` : ''}</div></div>
                 <div style="text-align:right"><div style="font-size:20px;font-weight:700;color:${brand}">${title}</div>${opts.estimate ? '' : html`<div>Invoice # <b>${sale.number}</b></div>`}<div>Date: ${HP.fmt.dateTime(sale.date || new Date())}</div>${opts.copyLabel ? html`<div>${opts.copyLabel}</div>` : ''}</div></div>
               ${r.showCustomer ? html`<div style="margin:14px 0;padding:10px;background:#f8fafc;border-radius:6px"><b>Bill to:</b> ${sale.customerName || 'Walk-in Customer'}</div>` : ''}
@@ -50,8 +50,8 @@
         // (the thermal receipt prints one QR code: the WhatsApp one when the shop has a WhatsApp number, else Scan & Pay)
         const size = thermalSize(r);
         return html`<div class="receipt ${width}" style="padding:4px;${thermalStyle(r)}">
-            ${r.showLogo && c.logo ? html`<img src="${c.logo}" style="display:block;margin:0 auto 4px;width:auto;height:auto;max-height:64px;max-width:70%;object-fit:contain" alt="">` : ''}
-            <div style="text-align:center;font-weight:800;font-size:${size + 3}px">${shopName}</div>
+            ${r.showLogo && c.logo ? thermalLogo(c.logo, r) : ''}
+            ${nameLine(r, c, shopName, size)}
             ${c.address ? html`<div style="text-align:center">${c.address}</div>` : ''}${c.phone ? html`<div style="text-align:center">Tel: ${c.phone}</div>` : ''}${r.showTaxId && c.taxId ? html`<div style="text-align:center">NTN: ${c.taxId}</div>` : ''}
             <div style="text-align:center;font-weight:700;margin-top:4px">${title}</div>
             <hr>${r.showCashier ? html`<div style="display:flex;justify-content:space-between"><span>Cashier</span><span>${sale.cashierName || (HP.session && HP.session.name) || ''}</span></div>` : ''}
@@ -61,7 +61,7 @@
             ${r.showCustomer ? html`<div style="display:flex;justify-content:space-between"><span>Customer</span><span>${sale.customerName || 'Walk-in Customer'}</span></div>` : ''}
             ${opts.copyLabel ? html`<div style="text-align:center">${opts.copyLabel}</div>` : ''}
             <hr><div style="display:flex;justify-content:space-between;font-weight:700"><span>Qty | Rate</span><span>Amount</span></div><hr>
-            ${items.map((i, k) => html`<div style="font-weight:800;font-size:${size + 1}px;margin-top:2px">${k + 1}. ${i.name}${i.serial ? html` <span style="font-size:${size}px">(S/N ${i.serial})</span>` : ''}</div><div style="display:flex;justify-content:space-between;padding-left:10px"><span>${HP.fmt.qty(i.qty)}${i.unitName ? ' ' + i.unitName : ''} | ${m(i.price)}</span><span>${m(i.total)}</span></div>`)}
+            ${items.map((i, k) => html`<div style="font-weight:700;font-size:${size + 1}px;margin-top:3px">${k + 1}. ${i.name}${i.serial ? html` <span style="font-size:${size}px">(S/N ${i.serial})</span>` : ''}</div><div style="display:flex;justify-content:space-between;padding-left:10px"><span>${HP.fmt.qty(i.qty)}${i.unitName ? ' ' + i.unitName : ''} | ${m(i.price)}</span><span>${m(i.total)}</span></div>`)}
             <hr><div style="display:flex;justify-content:space-between"><span>Total Item: ${items.length}</span><span>Total Qty: ${HP.fmt.qty(totalQty)}</span></div><hr>
             <table style="width:100%">${totalsRows(sale, m, savings, r)}</table>
             ${r.amountInWords ? html`<hr><div><b>Amount in Words:</b> ${Calc.words(sale.total)}</div>` : ''}
@@ -94,12 +94,65 @@
             <div style="text-align:center;margin-top:2px">WhatsApp: +${n}</div>`;
     }
 
-    // thermal text: bold and its size from Receipt & POS (old settings without them: bold, 13 px)
-    const thermalSize = r => Math.min(14, Math.max(12, Number(r.thermalSize) || 13));
-    const thermalStyle = r => `font-size:${thermalSize(r)}px;font-weight:${r.thermalBold === false ? 400 : 700}`;
+    // ── the shop logo ──
+    // Most logo files have a wide empty (white or see-through) border around the picture: printed as it is, the logo came
+    // out small with a big gap under it. The border is cut off once per logo (kept in memory), so the picture itself fills
+    // the space. The first receipt after start may still use the uncut file while it is being cut (a few milliseconds).
+    const cut = new Map(); // original data URL → cut data URL ('' while cutting); only the current logo is kept
+    const inked = new Set(); // logos that loaded and have a picture in them (Print Shop Name may then be left out)
+    // (a little white is kept around the picture: 6 px above it, 4 px to the shop name)
+    function trimLogo(src) {
+        if (!src || cut.has(src)) return;
+        cut.clear(); inked.clear(); // a new logo replaces the old one
+        cut.set(src, '');
+        const same = () => cut.set(src, src);
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const w = img.naturalWidth, h = img.naturalHeight;
+                const c = document.createElement('canvas'); c.width = w; c.height = h;
+                const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+                const d = g.getImageData(0, 0, w, h).data;
+                let x0 = w, y0 = h, x1 = -1, y1 = -1;
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                    const i = (y * w + x) * 4;
+                    // ink = not see-through and not (near) white
+                    if (d[i + 3] > 24 && (d[i] < 232 || d[i + 1] < 232 || d[i + 2] < 232)) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+                }
+                if (x1 < 0) return void same();
+                x0 = Math.max(0, x0 - 2); y0 = Math.max(0, y0 - 2); x1 = Math.min(w - 1, x1 + 2); y1 = Math.min(h - 1, y1 + 2);
+                const W = x1 - x0 + 1, H = y1 - y0 + 1;
+                const o = document.createElement('canvas'); o.width = W; o.height = H;
+                const og = o.getContext('2d');
+                og.fillStyle = '#fff'; og.fillRect(0, 0, W, H); // see-through → white paper
+                og.drawImage(c, x0, y0, W, H, 0, 0, W, H);
+                // only the empty border is cut: the picture itself stays exactly as the shop made it
+                cut.set(src, W >= w - 4 && H >= h - 4 ? src : o.toDataURL('image/png'));
+                inked.add(src);
+            } catch { same(); }
+        };
+        img.onerror = same;
+        img.src = src;
+    }
+    const logoSrc = src => { if (!cut.has(src)) trimLogo(src); return cut.get(src) || src; };
+    // start cutting before the first receipt (POS and Sales call it when they open)
+    const warm = () => { const c = S().company || {}; if (c.logo) trimLogo(c.logo); };
+    // Receipt & POS → Logo size on thermal receipts: [most height in px, most width of the slip]
+    const LOGO = { S: [52, '45%'], M: [80, '65%'], L: [110, '90%'] };
+    // the logo is stretched to that width (a small file grows too) and kept in shape: when that would make it taller than
+    // the most height, it is drawn as tall as allowed, centred
+    const thermalLogo = (logo, r) => { const [h, w] = LOGO[r.logoSize] || LOGO.M; return html`<img src="${logoSrc(logo)}" style="display:block;margin:6px auto 4px;width:${w};height:auto;max-height:${h}px;object-fit:contain" alt="">`; };
+
+    // the shop name under the logo; left out when Print Shop Name is off and the logo (which shows the name) is printed
+    // (a logo that did not load, has nothing in it, or is still being read: the name is printed anyway)
+    const nameLine = (r, c, name, size) => (r.showShopName === false && r.showLogo && c.logo && inked.has(c.logo) ? '' : html`<div style="text-align:center;font-weight:700;font-size:${size + 2}px">${name}</div>`);
+
+    // thermal text: thin with the product names bold, or every line bold; its size (Receipt & POS; 12 px by default)
+    const thermalSize = r => Math.min(14, Math.max(12, Number(r.textSize) || 12));
+    const thermalStyle = r => `font-size:${thermalSize(r)}px;font-weight:${r.boldText === true ? 700 : 400}`;
 
     function totalsRows(sale, m, savings, r) {
-        const row = (l, v, b) => html`<tr><td style="${b ? 'font-weight:800;font-size:1.1em' : ''}">${l}</td><td style="text-align:right;${b ? 'font-weight:800;font-size:1.1em' : ''}">${v}</td></tr>`;
+        const row = (l, v, b) => html`<tr><td style="${b ? 'font-weight:700' : ''}">${l}</td><td style="text-align:right;${b ? 'font-weight:700' : ''}">${v}</td></tr>`;
         return html`${row('Bill Amount', m(sale.subtotal))}${Number(sale.discount) ? row('Discount', '-' + m(sale.discount)) : ''}${Number(sale.tax) ? row('Tax', m(sale.tax)) : ''}
           ${row('Net Payable', m(sale.total), true)}${Number(sale.paid) && Number(sale.due) ? row('Paid', m(sale.paid)) : ''}${Number(sale.due) ? row('Due (Udhar)', m(sale.due), true) : ''}
           ${r.showSavings && savings > 0 ? row('You saved', m(savings)) : ''}
@@ -183,14 +236,14 @@
         const vendor = p.partyType === 'VENDOR';
         const shopName = c.name || (HP.session.tenant && HP.session.tenant.name) || '';
         const METHOD = { CASH: 'Cash', BANK: 'Bank', CARD: 'Card', WALLET: 'Wallet', CHEQUE: 'Cheque' };
-        const row = (l, v, b) => html`<div style="display:flex;justify-content:space-between;gap:8px;${b ? `font-weight:800;font-size:${thermalSize(r) + 2}px` : ''}"><span>${l}</span><span>${v}</span></div>`;
+        const row = (l, v, b) => html`<div style="display:flex;justify-content:space-between;gap:8px;${b ? `font-weight:700;font-size:${thermalSize(r) + 2}px` : ''}"><span>${l}</span><span>${v}</span></div>`;
         const hasBal = p.balance !== null && p.balance !== undefined;
         const balWord = vendor ? 'Payable' : 'Receivable';
         return html`<div class="receipt ${width}" style="padding:4px;${thermalStyle(r)}">
-            ${r.showLogo && c.logo ? html`<img src="${c.logo}" style="display:block;margin:0 auto 4px;width:auto;height:auto;max-height:64px;max-width:70%;object-fit:contain" alt="">` : ''}
-            <div style="text-align:center;font-weight:800;font-size:${thermalSize(r) + 3}px">${shopName}</div>
+            ${r.showLogo && c.logo ? thermalLogo(c.logo, r) : ''}
+            ${nameLine(r, c, shopName, thermalSize(r))}
             ${c.address ? html`<div style="text-align:center">${c.address}</div>` : ''}${c.phone ? html`<div style="text-align:center">Tel: ${c.phone}</div>` : ''}
-            <div style="text-align:center;font-weight:800;margin-top:4px">${inn ? 'PAYMENT RECEIPT' : 'PAYMENT VOUCHER'}</div><hr>
+            <div style="text-align:center;font-weight:700;margin-top:4px">${inn ? 'PAYMENT RECEIPT' : 'PAYMENT VOUCHER'}</div><hr>
             ${row('Receipt No', html`<b>${p.number}</b>`)}${row('Date', HP.fmt.date(p.date || new Date()))}${row('Time', HP.fmt.time(p.date || new Date()))}
             ${row(vendor ? 'Vendor' : p.partyName ? 'Customer' : inn ? 'Received from' : 'Paid to', p.partyName || (inn ? 'Other income' : 'Other payout'))}${p.partyPhone ? row('Phone', p.partyPhone) : ''}
             ${row('Method', `${METHOD[p.method] || p.method || ''}${p.accountName ? ` (${p.accountName})` : ''}`)}${p.reference ? row('Ref', p.reference) : ''}${p.note ? html`<div>Note: ${p.note}</div>` : ''}<hr>
@@ -205,5 +258,5 @@
     // "Print receipt after saving" — remembered on this computer, on unless switched off
     const autoPayPrint = v => { try { if (v === undefined) return localStorage.getItem('hp.payPrint') !== '0'; localStorage.setItem('hp.payPrint', v ? '1' : '0'); } catch { return true; } };
 
-    HP.receipt = { receipt, printSale, preview, renderCodes, whatsappBlock, waDigits, sendWhatsApp, sharePicture, itemsText, paymentReceipt, printPayment, autoPayPrint };
+    HP.receipt = { warm, logoSrc, receipt, printSale, preview, renderCodes, whatsappBlock, waDigits, sendWhatsApp, sharePicture, itemsText, paymentReceipt, printPayment, autoPayPrint };
 })();

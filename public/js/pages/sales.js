@@ -35,6 +35,7 @@ function paymentsDialog(s) {
 HP.page('/sales', {
     title: 'Sales', perm: 'sales.view',
     async render(el, p, query) {
+        if (HP.receipt && HP.receipt.warm) HP.receipt.warm();
         const monthStart = fmt.ymd(new Date()).slice(0, 8) + '01';
         const f = { q: query.q || '', status: '', from: query.q ? '' : monthStart, to: query.q ? '' : fmt.ymd(new Date()) };
         let datesTouched = !!query.q;

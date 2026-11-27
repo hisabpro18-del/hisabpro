@@ -167,10 +167,15 @@ test('shop requests: wholesale per line, stock & price, payments, search, dashbo
         const cashier = await h.user('CASHIER', ['sales.create']);
         assert.equal((await h.get('/api/pos/sales?q=Bilal', cashier)).data.sales.length, 0); // a cashier: own sales only
         const rc = (await h.get('/api/settings')).data.receipt;
-        assert.deepEqual([rc.thermalBold, rc.thermalSize], [true, 13]);
-        const saved = (await h.put('/api/settings/receipt', { thermalBold: false, thermalSize: 14 })).data;
-        assert.deepEqual([saved.thermalBold, saved.thermalSize], [false, 14]);
-        assert.equal((await h.put('/api/settings/receipt', { thermalSize: 20 })).status, 400);
+        assert.deepEqual([rc.boldText, rc.textSize], [false, 12]); // thin text, product names bold
+        const saved = (await h.put('/api/settings/receipt', { boldText: true, textSize: 14 })).data;
+        assert.deepEqual([saved.boldText, saved.textSize], [true, 14]);
+        assert.equal((await h.put('/api/settings/receipt', { textSize: 20 })).status, 400);
+        assert.equal(rc.logoSize, 'M');
+        assert.equal((await h.put('/api/settings/receipt', { logoSize: 'L' })).data.logoSize, 'L');
+        assert.equal((await h.put('/api/settings/receipt', { logoSize: 'XL' })).status, 400);
+        assert.equal(rc.showShopName, true);
+        assert.equal((await h.put('/api/settings/receipt', { showShopName: false })).data.showShopName, false);
     });
 
     await t.test('dashboard Show Details: an owner password opens it; a wrong one is a 400 (not a sign-out)', async () => {
