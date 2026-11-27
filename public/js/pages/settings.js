@@ -11,6 +11,8 @@ const LAYOUT = [
     ['showSavings', 'Show Savings', 'Total amount saved on bill'], ['amountInWords', 'Amount in Words', ''], ['showTerms', 'Terms & Conditions', ''], ['showQr', 'QR Code (Scan & Pay)', ''],
     ['showPrevBalance', 'Show Previous Balance / Ledger', 'Credit / udhar running balance on invoice'], ['showBank', 'Show Bank Details', 'Wire transfer instructions for B2B'],
     ['showCashier', 'Show Salesman / Cashier Name', ''], ['showSignature', 'Show Digital Signature Line', 'Space for physical stamp or signature'],
+    ['showWhatsappQr', 'WhatsApp QR Code', 'At the bottom of receipts: customers scan it to chat with you (uses Company Profile → WhatsApp number)'],
+    ['showBarcode', 'Invoice Barcode on Thermal Receipt', 'Barcode of the bill number at the end of the receipt'],
 ];
 const TABS = [['company', 'Company Profile', 'building'], ['receipt', 'Receipt & POS', 'receipt'], ['localization', 'Localization', 'globe']];
 // the Windows app also gets "App update" (one click to install a new version)
@@ -36,6 +38,7 @@ HP.page('/settings', {
             <form data-form class="mt-6" novalidate>${ui.grid(
                 ui.field({ label: 'Name', name: 'name', value: s.company.name, required: true, half: true }),
                 ui.field({ label: 'Phone', name: 'phone', value: s.company.phone, half: true }),
+                ui.field({ label: 'WhatsApp number', name: 'whatsapp', value: s.company.whatsapp, half: true, placeholder: '0300-1234567', help: 'Printed as a QR code on receipts: customers scan it to open a WhatsApp chat with you.' }),
                 ui.field({ label: 'Email', name: 'email', type: 'email', value: s.company.email, half: true }),
                 ui.field({ label: 'Tax ID / NTN', name: 'taxId', value: s.company.taxId, half: true }),
                 ui.field({ label: 'Address', name: 'address', value: s.company.address }),
@@ -152,7 +155,7 @@ HP.page('/settings', {
             btn.disabled = true;
             try {
                 if (tab === 'company') {
-                    s.company = await api.put('/api/settings/company', { name: v.name, phone: v.phone, email: v.email, taxId: v.taxId, address: v.address, logo });
+                    s.company = await api.put('/api/settings/company', { name: v.name, phone: v.phone, whatsapp: v.whatsapp, email: v.email, taxId: v.taxId, address: v.address, logo });
                 } else if (tab === 'receipt') {
                     const r = { paper: v.paper, width: v.width, template: v.template, brandColor: v.brandColor, font: v.font, qrType: v.qrType, copies: Number(v.copies) || 1, bankDetails: v.bankDetails };
                     for (const [k] of LAYOUT) r[k] = v[k];

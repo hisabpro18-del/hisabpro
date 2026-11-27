@@ -86,6 +86,22 @@ test('desktop PC runs every module on SQLite and syncs it all', { timeout: 18000
         ok(await call('GET', '/api/backup/storage', null, tk), 'backup storage');
     });
 
+    let rice;
+    await t.test('the WhatsApp dialog, the invoice search and Stock & Price Management work on the PC', async () => {
+        // the WhatsApp buttons first read the message templates: this was a 500 on PCs (no Secret table on SQLite)
+        const m = ok(await call('GET', '/api/khata/messaging', null, tk), 'messaging');
+        assert.match(m.billEn, /\{items\}/);
+        assert.equal(m.hasApiKey, false);
+        ok(await call('GET', '/api/pos/sales?q=1239999', null, tk), 'sales search by phone');
+        rice = ok(await call('POST', '/api/inventory/products', { name: 'Rice 5kg', retailPrice: 150000, cost: 120000 }, tk), 'rice').id;
+        const r = ok(await call('POST', '/api/inventory/stock-price/save', { reason: 'OPENING', changes: [{ productId: rice, wholesalePrice: 140000, stock: { op: 'ADD', qty: 5 } }] }, tk), 'stock-price save');
+        assert.equal(r.updated, 1);
+        const list = ok(await call('GET', '/api/inventory/stock-price', null, tk), 'stock-price list').products;
+        assert.deepEqual([list.find(p => p.id === rice).stock, list.find(p => p.id === rice).wholesalePrice], [5, 140000]);
+        assert.equal(ok(await call('GET', '/api/inventory/stock-price/history?productId=' + rice, null, tk), 'history').length, 2);
+        ok(await call('POST', '/api/auth/unlock', { password: 'Owner@12345' }, tk), 'dashboard unlock on the PC');
+    });
+
     await t.test('everything made on the PC reaches the cloud with the same figures', async () => {
         await waitFor(async () => (await call('GET', '/api/desktop/status')).data.pending === 0, 30000);
         const pl = (await h.get('/api/reports/profit-loss?preset=month')).data.pl;
@@ -98,5 +114,10 @@ test('desktop PC runs every module on SQLite and syncs it all', { timeout: 18000
         assert.equal((await h.get('/api/inventory/products/' + product)).data.stock, 8);
         const settings = (await h.get('/api/settings')).data;
         assert.equal(settings.company.address, 'Shop 12, Main Bazar');
+        // Stock & Price changes made on the PC: the price, the stock and their history
+        const cloudRice = (await h.get('/api/inventory/stock-price')).data.products.find(p => p.id === rice);
+        assert.deepEqual([cloudRice.stock, cloudRice.wholesalePrice], [5, 140000]);
+        const hist = (await h.get('/api/inventory/stock-price/history?productId=' + rice)).data;
+        assert.deepEqual(hist.map(x => x.field).sort(), ['STOCK', 'WHOLESALE']);
     });
 });

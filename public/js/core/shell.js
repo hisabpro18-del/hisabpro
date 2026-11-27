@@ -7,6 +7,8 @@
     const NAV = [
         { label: 'Dashboard', href: '/dashboard', iconName: 'grid', perm: 'reports.view' },
         { label: 'POS Terminal', href: '/pos', iconName: 'cart', perm: 'sales.create' },
+        { label: 'Stock & Price Management', href: '/stock-price', iconName: 'tag', perm: ['inventory.edit', 'inventory.add', 'purchases.manage', 'reports.view'] },
+        { label: 'Product Cost Price List', href: '/cost-prices', iconName: 'coins', perm: ['inventory.edit', 'inventory.add', 'purchases.manage', 'reports.view'] },
         { divider: true },
         { group: 'Sales', iconName: 'trending', items: [['Sales', '/sales', 'sales.view'], ['Sales Return', '/sales-return', 'sales.delete']] },
         { group: 'Purchasing', iconName: 'bag', items: [['Purchases', '/purchases', 'purchases.manage'], ['Purchase Return', '/purchase-return', 'purchases.manage']] },

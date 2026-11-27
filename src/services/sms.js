@@ -14,12 +14,16 @@ function msisdn(phone) {
     return d.length === 12 && d.startsWith('923') ? d : null;
 }
 
+// the Windows app's database has no Secret table (keys stay on the server): there they are simply not set. Reading one
+// there used to throw, which broke every WhatsApp button on a PC ("Something went wrong on the server").
 async function secret(tenantId, key) {
+    if (!prisma.secret) return '';
     const s = await prisma.secret.findUnique({ where: { id: `${tenantId}:${key}` } });
     return s ? s.value : '';
 }
 async function setSecret(tenantId, key, value) {
     const id = `${tenantId}:${key}`;
+    if (!prisma.secret) return;
     if (!value) { await prisma.secret.deleteMany({ where: { id } }); return; }
     await prisma.secret.upsert({ where: { id }, create: { id, tenantId, key, value }, update: { value, updatedAt: new Date() } });
 }

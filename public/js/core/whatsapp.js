@@ -12,14 +12,24 @@
         return d.length === 12 && d.startsWith('923') ? d : null;
     }
     // where the chat opens: the WhatsApp app on this computer (default) or WhatsApp Web; chosen per computer
-    const target = () => { try { return localStorage.getItem('hp.waTarget') === 'web' ? 'web' : 'app'; } catch { return 'app'; } };
-    const setTarget = t => { try { t === 'app' ? localStorage.removeItem('hp.waTarget') : localStorage.setItem('hp.waTarget', t); } catch { } };
+    const target = () => { try { const v = localStorage.getItem('hp.waTarget'); return v === 'web' || (window.hpDesktop && v !== 'app') ? 'web' : 'app'; } catch { return 'app'; } };
+    // (the Windows app keeps "app" written down: its default is WhatsApp Web)
+    const setTarget = t => { try { t === 'app' && !window.hpDesktop ? localStorage.removeItem('hp.waTarget') : localStorage.setItem('hp.waTarget', t); } catch { } };
     const q = (n, text) => `phone=${n}&text=${encodeURIComponent(text)}`;
     // call straight from a click handler (a browser opens apps / tabs only from the click itself)
     function open(phone, text, onNotOpened) {
         const n = number(phone);
         if (!n) { HP.ui.toast('This number is not a Pakistani mobile (e.g. 0300-1234567), so it has no WhatsApp.', 'error'); return false; }
-        if (target() === 'web' || window.hpDesktop) { window.open(`https://web.whatsapp.com/send?${q(n, text)}`, '_blank', 'noopener'); return true; }
+        // the Android app: a wa.me link is handed to Android, which opens the WhatsApp app (or WhatsApp Business) itself.
+        // Never WhatsApp Web here: it does not work in a phone browser, and a "did not open" guess must not switch to it.
+        if (HP.native && HP.native.isApp()) { window.open(`https://wa.me/${n}?text=${encodeURIComponent(text)}`, '_blank'); return true; }
+        // the Windows app: WhatsApp Web in the browser unless "WhatsApp app" was chosen (then WhatsApp Desktop opens)
+        if (window.hpDesktop) {
+            if (target() === 'app') window.open(`whatsapp://send?${q(n, text)}`, '_blank');
+            else window.open(`https://web.whatsapp.com/send?${q(n, text)}`, '_blank', 'noopener');
+            return true;
+        }
+        if (target() === 'web') { window.open(`https://web.whatsapp.com/send?${q(n, text)}`, '_blank', 'noopener'); return true; }
         window.location.href = `whatsapp://send?${q(n, text)}`;
         let left = false;
         const leave = () => { left = true; };

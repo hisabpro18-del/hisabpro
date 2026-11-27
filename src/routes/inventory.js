@@ -317,6 +317,7 @@ router.put('/products/:id', EDIT, async (req, res) => {
     const maps = await namesMaps(t);
     await withTx(t, async tx => {
         await tx.product.update({ where: { id: cur.id }, data });
+        await logRows(tx, priceLogs(cur, data, { tenantId: t, user: req.user, note: 'Product edited' }));
         if (cur.type === 'VARIANT') {
             for (const e of existing) {
                 const v = variants.find(x => x.id === e.id);
@@ -367,6 +368,7 @@ router.post('/products/:id/adjust', EDIT, async (req, res) => {
         const qty = mode === 'SET' ? Calc.q3(num(b.qty, 'Counted quantity', { min: -1e9, max: 1e9, allowEmpty: false }) - now) : num(b.qty, 'Quantity', { min: -1e9, max: 1e9, allowEmpty: false });
         if (!qty) throw new HttpError(400, 'Nothing to change: the quantity is the same.');
         await stock.move(tx, { tenantId: t, productId: p.id, qty, type: 'ADJUSTMENT', unitCost: N(p.cost), refNo: 'Adjustment', note, userId: req.user.id });
+        await logRows(tx, [stockLog(p, now, Calc.q3(now + qty), { tenantId: t, user: req.user, reason: 'ADJUSTMENT', note })]);
         return { before: now, after: Calc.q3(now + qty), qty };
     });
     await audit(req, { action: 'inventory.stock_adjust', summary: `Stock of "${p.name}": ${result.before} → ${result.after} (${result.qty > 0 ? '+' : ''}${result.qty}); ${note}` });
@@ -460,6 +462,142 @@ router.post('/products/import', ADD, async (req, res) => {
     }, { timeout: 180000 });
     await audit(req, { action: 'inventory.product_import', summary: `${n} product(s) imported from a file${skipped ? `, ${skipped} already in HisabPro skipped` : ''}` });
     res.json({ imported: n, skipped });
+});
+
+// ── Stock & Price Management and the Product Cost Price List ──
+// One page to change the retail / wholesale / cost price and the stock of one product, of the ticked ones or of all of them,
+// without opening products one by one. Every change is kept in StockPriceLog (before → after, who, why).
+const COSTS = can('inventory.add', 'inventory.edit', 'purchases.manage', 'reports.view'); // who may see what goods cost
+const STOCK_REASONS = { OPENING: 'Opening stock', PURCHASE: 'Purchase stock', RETURN: 'Customer return', DAMAGED: 'Damaged stock', ADJUSTMENT: 'Manual adjustment' };
+const PRICE_FIELDS = [['retailPrice', 'RETAIL'], ['wholesalePrice', 'WHOLESALE'], ['cost', 'COST']];
+const by = user => ({ userId: user.id, userName: user.name || user.email || '' });
+const big = v => (v === null || v === undefined ? null : B(N(v)));
+// a history row for each price that changed between cur and next (product rows or plain objects, paisa or BigInt)
+function priceLogs(cur, next, { tenantId, user, reason = 'PRICE', note = '', batchId = null, date = new Date() }) {
+    const out = [];
+    for (const [k, field] of PRICE_FIELDS) {
+        if (next[k] === undefined) continue;
+        const a = cur[k] === null || cur[k] === undefined ? null : N(cur[k]), b = next[k] === null ? null : N(next[k]);
+        if (a === b) continue;
+        out.push({ tenantId, productId: cur.id, productName: cur.name, field, oldPrice: big(a), newPrice: big(b), reason, note, batchId, date, ...by(user) });
+    }
+    return out;
+}
+const stockLog = (p, before, after, { tenantId, user, reason, note = '', batchId = null, date = new Date() }) => ({ tenantId, productId: p.id, productName: p.name, field: 'STOCK', oldQty: before, newQty: after, reason, note, batchId, date, ...by(user) });
+const logRows = (tx, rows) => (rows.length ? tx.stockPriceLog.createMany({ data: rows }) : null);
+
+router.get('/stock-price', COSTS, async (req, res) => {
+    const t = req.user.tenantId;
+    const [list, maps, levels, vendors] = await Promise.all([
+        prisma.product.findMany({ where: { tenantId: t, deletedAt: null, type: { not: 'VARIANT' } }, orderBy: { name: 'asc' } }),
+        namesMaps(t),
+        stock.levels(t),
+        prisma.party.findMany({ where: { tenantId: t, type: 'VENDOR', deletedAt: null }, orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+    ]);
+    res.json({
+        products: list.map(p => ({
+            id: p.id, name: p.name, type: p.type, sku: p.sku, barcode: p.barcode, active: p.active, parentId: p.parentId,
+            categoryId: p.categoryId, category: p.categoryId && maps.cats[p.categoryId] ? maps.cats[p.categoryId].name : '',
+            brandId: p.brandId, brand: p.brandId && maps.brands[p.brandId] ? maps.brands[p.brandId].name : '',
+            baseUnit: p.baseUnitId && maps.units[p.baseUnitId] ? maps.units[p.baseUnitId].shortCode : '',
+            stock: p.type === 'SERVICE' ? null : levels[p.id] || 0,
+            retailPrice: N(p.retailPrice), wholesalePrice: p.wholesalePrice === null ? null : N(p.wholesalePrice), cost: N(p.cost), updatedAt: p.updatedAt,
+        })),
+        vendors,
+        canEdit: Perms.has(req.user, 'inventory.edit'),
+    });
+});
+
+// the products bought from one supplier (the Supplier filter)
+router.get('/stock-price/supplier/:id', COSTS, async (req, res) => {
+    const t = req.user.tenantId;
+    const purchases = await prisma.purchase.findMany({ where: { tenantId: t, vendorId: req.params.id, deletedAt: null }, select: { id: true } });
+    const ids = purchases.map(p => p.id);
+    const items = ids.length ? await prisma.purchaseItem.groupBy({ by: ['productId'], where: { tenantId: t, purchaseId: { in: ids }, deletedAt: null } }) : [];
+    res.json(items.map(i => i.productId));
+});
+
+// save changes: [{ productId, retailPrice?, wholesalePrice?, cost? (paisa, wholesale null/0 = none), stock?: { op: ADD | REMOVE | SET, qty } }]
+// Only the fields sent are changed. Up to 500 products per call (the page sends bigger updates in parts).
+router.post('/stock-price/save', EDIT, async (req, res) => {
+    const t = req.user.tenantId;
+    const b = req.body || {};
+    const list = Array.isArray(b.changes) ? b.changes.filter(c => c && typeof c === 'object' && c.productId) : [];
+    if (!list.length) throw new HttpError(400, 'Nothing to save.');
+    if (list.length > 500) throw new HttpError(400, 'Save at most 500 products at a time.');
+    const reason = oneOf(String(b.reason || 'ADJUSTMENT').toUpperCase(), Object.keys(STOCK_REASONS), 'Reason');
+    const note = str(b.note, 200);
+    const batchId = b.batchId && /^[0-9a-f-]{36}$/i.test(String(b.batchId)) ? String(b.batchId).toLowerCase() : require('crypto').randomUUID();
+    const changes = list.map((c, i) => {
+        const o = { productId: String(c.productId) };
+        if (c.retailPrice !== undefined) o.retailPrice = paisa(c.retailPrice, `Row ${i + 1} retail price`);
+        if (c.wholesalePrice !== undefined) o.wholesalePrice = c.wholesalePrice === null || c.wholesalePrice === '' || Number(c.wholesalePrice) === 0 ? null : paisa(c.wholesalePrice, `Row ${i + 1} wholesale price`);
+        if (c.cost !== undefined) o.cost = paisa(c.cost, `Row ${i + 1} cost price`);
+        if (c.stock) {
+            const op = oneOf(String(c.stock.op || '').toUpperCase(), ['ADD', 'REMOVE', 'SET'], `Row ${i + 1} stock change`);
+            const qty = Calc.q3(num(c.stock.qty, `Row ${i + 1} stock quantity`, { min: 0, max: 1e9, allowEmpty: false }));
+            o.stock = { op, qty };
+        }
+        return o;
+    });
+    const sums = { RETAIL: 0, WHOLESALE: 0, COST: 0, STOCK: 0 };
+    const result = await withTx(t, async tx => {
+        const products = await tx.product.findMany({ where: { tenantId: t, deletedAt: null, id: { in: [...new Set(changes.map(c => c.productId))] } } });
+        const byId = Object.fromEntries(products.map(p => [p.id, p]));
+        const stockIds = changes.filter(c => c.stock).map(c => c.productId);
+        const lv = stockIds.length ? await stock.levels(t, stockIds, tx) : {};
+        const logs = [];
+        const date = new Date();
+        let updated = 0;
+        for (const c of changes) {
+            const p = byId[c.productId];
+            if (!p) throw new HttpError(400, 'A product in the list no longer exists. Reload the page and try again.');
+            if (p.type === 'VARIANT') throw new HttpError(400, `"${p.name}": change each colour / size separately.`);
+            const data = {};
+            for (const [k] of PRICE_FIELDS) if (c[k] !== undefined && (c[k] === null ? p[k] !== null : p[k] === null || N(p[k]) !== c[k])) data[k] = c[k] === null ? null : B(c[k]);
+            const plog = priceLogs(p, Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v === null ? null : N(v)])), { tenantId: t, user: req.user, note, batchId, date });
+            if (Object.keys(data).length) { await tx.product.update({ where: { id: p.id }, data }); logs.push(...plog); for (const l of plog) sums[l.field]++; }
+            let moved = false;
+            if (c.stock) {
+                if (p.type === 'SERVICE') throw new HttpError(400, `"${p.name}" is a service: it has no stock.`);
+                if (p.type === 'SERIAL') throw new HttpError(400, `"${p.name}" is counted by serial / IMEI: add or remove its serials on the product.`);
+                const now = lv[p.id] || 0;
+                const delta = c.stock.op === 'ADD' ? c.stock.qty : c.stock.op === 'REMOVE' ? -c.stock.qty : Calc.q3(c.stock.qty - now);
+                if (delta) {
+                    const unitCost = data.cost !== undefined ? N(data.cost) : N(p.cost);
+                    await stock.move(tx, { tenantId: t, productId: p.id, qty: delta, type: reason === 'OPENING' ? 'OPENING' : 'ADJUSTMENT', unitCost, refNo: 'Stock & Price', note: [STOCK_REASONS[reason], note].filter(Boolean).join(': '), date, userId: req.user.id });
+                    lv[p.id] = Calc.q3(now + delta);
+                    logs.push(stockLog(p, now, lv[p.id], { tenantId: t, user: req.user, reason, note, batchId, date }));
+                    sums.STOCK++; moved = true;
+                }
+            }
+            if (Object.keys(data).length || moved) updated++;
+        }
+        await logRows(tx, logs);
+        return { updated };
+    }, { timeout: 120000 });
+    if (result.updated) {
+        const parts = [['RETAIL', 'retail price'], ['WHOLESALE', 'wholesale price'], ['COST', 'cost price'], ['STOCK', 'stock']].filter(([k]) => sums[k]).map(([k, l]) => `${l} ×${sums[k]}`);
+        await audit(req, { action: 'inventory.stock_price', summary: `Stock & Price Management: ${result.updated} product(s) changed (${parts.join(', ')})${sums.STOCK ? `; reason: ${STOCK_REASONS[reason].toLowerCase()}` : ''}${note ? ` — ${note}` : ''}` });
+    }
+    res.json({ updated: result.updated, batchId });
+});
+
+// the history of price and stock changes (newest first)
+router.get('/stock-price/history', COSTS, async (req, res) => {
+    const t = req.user.tenantId;
+    const where = { tenantId: t, deletedAt: null };
+    if (req.query.productId) where.productId = String(req.query.productId);
+    if (['RETAIL', 'WHOLESALE', 'COST', 'STOCK'].includes(req.query.field)) where.field = req.query.field;
+    const q = str(req.query.q, 100);
+    if (q) where.productName = ci(q);
+    if (req.query.from || req.query.to) {
+        const tz = (await require('../services/settings').get(t, 'localization')).timezone;
+        const r = require('../lib/dates').range('custom', { from: req.query.from, to: req.query.to || req.query.from, tz });
+        where.date = { gte: r.from, lt: r.to };
+    }
+    const rows = await prisma.stockPriceLog.findMany({ where, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }], take: Math.min(Number(req.query.limit) || 1000, 3000) });
+    res.json(rows.map(r => ({ id: r.id, date: r.date, productId: r.productId, productName: r.productName, field: r.field, oldPrice: r.oldPrice === null ? null : N(r.oldPrice), newPrice: r.newPrice === null ? null : N(r.newPrice), oldQty: r.oldQty, newQty: r.newQty, reason: r.reason, reasonLabel: r.reason === 'PRICE' ? 'Price change' : STOCK_REASONS[r.reason] || r.reason, note: r.note, userName: r.userName, batchId: r.batchId })));
 });
 
 // ── the POS catalog: everything sellable, with stock, prices, units and category names ──

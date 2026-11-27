@@ -4,10 +4,40 @@ const has = k => Perms.has(HP.session, k);
 const STATUS = { COMPLETED: ['Completed', 'good'], DUE: ['Pending / Due', 'warn'], PARTIAL_REFUND: ['Partly refunded', 'gray'], REFUNDED: ['Refunded', 'bad'] };
 const statusBadge = s => ui.badge(...(STATUS[s] || [s, 'gray']));
 
+const METHOD = { CASH: 'Cash', CARD: 'Card', BANK: 'Bank', WALLET: 'Wallet' };
+const openSale = id => api.get('/api/pos/sales/' + id);
+
+// what was bought on a bill
+function itemsDialog(s) {
+    ui.modal({ title: `${s.number} · ${t('Purchased products')}`, subtitle: `${s.customerName} · ${fmt.dateTime(s.date)}`, width: 640,
+        body: html`<div class="overflow-x-auto"><table class="tbl" data-nopage><thead><tr><th>#</th><th>Product</th><th class="!text-right">Qty</th><th class="!text-right">Rate</th><th class="!text-right">Amount</th><th class="!text-right">Returned</th></tr></thead>
+          <tbody>${s.items.map((i, k) => html`<tr><td class="text-muted">${k + 1}</td><td>${i.name}${i.serial ? html`<div class="text-xs text-muted">S/N ${i.serial}</div>` : ''}${i.note ? html`<div class="text-xs text-muted">${i.note}</div>` : ''}</td><td class="num">${fmt.qty(i.qty)} ${i.unitName || ''}</td><td class="num">${fmt.money(i.price)}</td><td class="num font-semibold">${fmt.money(i.total)}</td><td class="num ${i.returnedQty ? 'text-bad' : 'text-muted'}">${i.returnedQty ? fmt.qty(i.returnedQty) : '—'}</td></tr>`)}</tbody></table></div>
+          <div class="mt-4 ms-auto max-w-xs space-y-1 text-sm">${[['Subtotal', s.subtotal], ['Discount', -Number(s.discount)], ['Tax', s.tax]].filter(([, v]) => Number(v)).map(([l, v]) => html`<div class="flex justify-between"><span class="text-muted">${t(l)}</span><span class="tabular-nums">${fmt.money(v)}</span></div>`)}
+            <div class="flex justify-between border-t border-line pt-1 font-bold"><span>${t('Total')}</span><span class="tabular-nums">${fmt.money(s.total)}</span></div></div>`,
+        footer: html`<button class="btn btn-primary" data-close>${t('Close')}</button>` });
+}
+// how the bill was paid: at the counter (cash / card / bank, change given), what was left as udhaar, and refunds
+function paymentsDialog(s) {
+    const pays = s.payments || [];
+    const rows = [
+        ...pays.map(p => ({ date: s.date, what: `${t('Paid at the counter')} — ${t(METHOD[p.method] || p.method)}`, amount: Number(p.amount), tone: 'text-good' })),
+        ...(Number(s.change) ? [{ date: s.date, what: t('Change given back'), amount: -Number(s.change), tone: 'text-muted' }] : []),
+        ...(s.returns || []).map(r => ({ date: r.date, what: `${t('Return')} ${r.number}`, amount: -Number(r.total), tone: 'text-bad' })),
+    ];
+    ui.modal({ title: `${s.number} · ${t('Payment history')}`, subtitle: `${s.customerName} · ${fmt.dateTime(s.date)}`, width: 560,
+        body: html`<div class="mb-4 grid grid-cols-3 gap-3">${[['Bill total', s.total, ''], ['Paid', s.paid, 'text-good'], ['Remaining / Due', s.due, Number(s.due) ? 'text-warn' : '']].map(([l, v, c]) => html`<div class="rounded-xl bg-surface-2 px-3 py-2"><div class="text-xs text-muted">${t(l)}</div><div class="font-bold tabular-nums ${c}">${fmt.money(v)}</div></div>`)}</div>
+          ${rows.length ? html`<table class="tbl" data-nopage><thead><tr><th>Date</th><th>Entry</th><th class="!text-right">Amount</th></tr></thead><tbody>${rows.map(r => html`<tr><td class="whitespace-nowrap text-muted">${fmt.dateTime(r.date)}</td><td>${r.what}</td><td class="num font-semibold ${r.tone}">${fmt.money(r.amount)}</td></tr>`)}</tbody></table>` : html`<div class="py-6 text-center text-sm text-muted">${t('Nothing was paid at the counter.')}</div>`}
+          ${Number(s.due) && s.customerId ? html`<p class="mt-3 text-xs text-muted">${t('The due amount went to the customer\'s khata. Later payments are on their khata page.')}${s.customerBalance !== undefined ? html` ${t('Khata balance now')}: <b>${fmt.money(s.customerBalance)}</b>` : ''}</p>` : ''}`,
+        footer: html`${s.customerId ? html`<a class="btn btn-outline me-auto" href="/khata/c/${s.customerId}" data-link data-close>${icon('handCoins')}${t('Open khata')}</a>` : ''}<button class="btn btn-primary" data-close>${t('Close')}</button>` });
+}
+
+// Sales Invoice History & Search: any invoice, old or new, by number, customer name or mobile, and dates
 HP.page('/sales', {
     title: 'Sales', perm: 'sales.view',
     async render(el, p, query) {
-        const f = { q: '', status: '', from: fmt.ymd(new Date()).slice(0, 8) + '01', to: fmt.ymd(new Date()) };
+        const monthStart = fmt.ymd(new Date()).slice(0, 8) + '01';
+        const f = { q: query.q || '', status: '', from: query.q ? '' : monthStart, to: query.q ? '' : fmt.ymd(new Date()) };
+        let datesTouched = !!query.q;
         let data = { sales: [], summary: {} }, sort = { key: 'date', dir: -1 };
         const draw = () => {
             const rows = [...data.sales].sort((a, b) => { const x = a[sort.key], y = b[sort.key]; return (x > y ? 1 : x < y ? -1 : 0) * sort.dir; });
@@ -17,43 +47,66 @@ HP.page('/sales', {
                 ${ui.statCard({ label: 'Total Revenue', value: fmt.money(s.revenue), iconName: 'trending', tone: 'good', valueTone: 'good' })}
                 ${ui.statCard({ label: 'Due', value: fmt.money(s.due), iconName: 'banknote', tone: 'warn', valueTone: 'warn' })}</div>`);
             el.querySelector('[data-capnote]').textContent = s.listed && s.count > s.listed ? `${t('Showing the newest')} ${s.listed.toLocaleString('en-US')} ${t('of')} ${s.count.toLocaleString('en-US')} — ${t('choose fewer dates or search to see the others.')}` : '';
+            el.querySelector('[data-datenote]').textContent = !f.from && !f.to ? t('All dates: old and new invoices are searched.') : '';
             const th = (k, l, num) => html`<button class="inline-flex items-center gap-1 uppercase ${num ? 'justify-end w-full' : ''}" data-sort="${k}">${l}${icon(sort.key === k ? (sort.dir > 0 ? 'chevronUp' : 'chevronDown') : 'chevronDown', `w-3 h-3 ${sort.key === k ? 'text-ink' : 'text-faint'}`)}</button>`;
             ui.mount(el.querySelector('[data-list]'), ui.table({
-                rows, empty: { iconName: 'receipt', title: 'No sales in this period', text: 'Sales made on the POS appear here.' },
+                rows, empty: { iconName: 'receipt', title: f.q ? 'No invoice matches' : 'No sales in this period', text: f.q ? 'Try part of the name, the mobile number or the invoice number.' : 'Sales made on the POS appear here.' },
+                rowAttr: s2 => `data-row="${s2.id}" class="cursor-pointer"`,
                 columns: [
                     { label: th('number', 'Invoice'), render: s2 => html`<span class="font-semibold">${s2.number}</span>` },
-                    { label: th('date', 'Date'), render: s2 => html`<span class="text-muted whitespace-nowrap">${fmt.dateTime(s2.date)}</span>` },
-                    { label: th('customerName', 'Customer'), render: s2 => s2.customerName },
+                    { label: th('date', 'Date & time'), render: s2 => html`<span class="text-muted whitespace-nowrap">${fmt.dateTime(s2.date)}</span>` },
+                    { label: th('customerName', 'Customer'), render: s2 => html`${s2.customerName}${s2.customerPhone ? html`<div class="text-xs text-muted">${s2.customerPhone}</div>` : ''}` },
                     { label: th('status', 'Status'), render: s2 => statusBadge(s2.status) },
                     { label: th('total', 'Total', true), num: true, render: s2 => html`<b>${fmt.money(s2.total)}</b>${s2.returnedTotal ? html`<div class="text-xs text-rose-600">−${fmt.money(s2.returnedTotal)} returned</div>` : ''}` },
+                    { label: th('paid', 'Paid', true), num: true, render: s2 => fmt.money(s2.paid) },
                     { label: th('due', 'Due', true), num: true, render: s2 => (s2.due ? html`<span class="text-warn font-semibold">${fmt.money(s2.due)}</span>` : '—') },
                     { label: 'Actions', render: s2 => html`<button class="btn-icon !h-8 !w-8 border-0" data-menu="${s2.id}" aria-label="Actions for ${s2.number}">${icon('dots')}</button>` },
                 ],
             }));
         };
-        const load = async () => { data = await api.get('/api/pos/sales', { ...f, limit: 5000 }); draw(); };
-        ui.mount(el, html`${ui.pageHeader({ title: t('Sales'), subtitle: 'Enterprise sales ledger — invoices, payments, and returns in real time.' })}
+        // the newest answer wins: a slow reply to an earlier keystroke must not replace the results of the last one
+        let seq = 0;
+        const load = async () => { const n = ++seq; const r = await api.get('/api/pos/sales', { ...f, limit: 5000 }); if (n === seq) { data = r; draw(); } };
+        ui.mount(el, html`${ui.pageHeader({ title: t('Sales'), subtitle: 'Sales invoice history — find any invoice by number, customer name, mobile number or date.' })}
           <div data-stats class="mb-4"></div>
           <div class="card card-pad mb-4 flex flex-wrap items-end gap-3">
-            <div class="relative w-full max-w-sm"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span><input class="input ps-9" placeholder="Search by Invoice ID or Customer Name" data-f="q" aria-label="Search by Invoice ID or Customer Name"></div>
+            <div class="w-full max-w-md"><div class="relative"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span><input class="input h-11 ps-9" placeholder="Invoice no., customer name or mobile number" data-f="q" value="${f.q}" aria-label="Search invoices" autocomplete="off"></div>
+              <p class="mt-1 text-xs text-muted empty:hidden" data-datenote></p></div>
             <div><select class="input w-44" data-f="status" aria-label="Filter by status"><option value="">All Statuses</option><option value="COMPLETED">Completed</option><option value="DUE">Pending / Due</option><option value="REFUNDED">Refunded</option></select>
-              <div class="mt-2 flex items-center gap-2"><input type="date" class="input h-9" data-f="from" value="${f.from}" aria-label="From date"><span>–</span><input type="date" class="input h-9" data-f="to" value="${f.to}" aria-label="To date"></div></div>
+              <div class="mt-2 flex items-center gap-2"><input type="date" class="input h-9" data-f="from" value="${f.from}" aria-label="From date"><span>–</span><input type="date" class="input h-9" data-f="to" value="${f.to}" aria-label="To date"><button class="btn btn-ghost btn-sm" data-alldates title="Search every date">${t('All dates')}</button></div></div>
             <div class="ms-auto flex gap-2"><button class="btn btn-outline" data-csv>${icon('download')}${t('Export CSV')}</button>${has('sales.create') ? html`<a href="/pos" data-link class="btn btn-primary">${icon('plus')}${t('New Sale')}</a>` : ''}</div>
           </div><p class="mb-2 text-xs text-muted empty:hidden" data-capnote></p><div data-list>${ui.loading()}</div>`);
         let tm;
-        ui.on(el, 'input', '[data-f]', (e, i) => { f[i.dataset.f] = i.value; clearTimeout(tm); tm = setTimeout(load, 250); });
+        const setDates = (from, to) => { f.from = from; f.to = to; el.querySelector('[data-f=from]').value = from; el.querySelector('[data-f=to]').value = to; };
+        ui.on(el, 'input', '[data-f]', (e, i) => {
+            const k = i.dataset.f;
+            f[k] = i.value;
+            if (k === 'from' || k === 'to') datesTouched = true;
+            // typing a search looks through every invoice (old ones too) unless dates were chosen on purpose
+            if (k === 'q' && !datesTouched) setDates(i.value.trim() ? '' : monthStart, i.value.trim() ? '' : fmt.ymd(new Date()));
+            clearTimeout(tm); tm = setTimeout(load, k === 'q' ? 200 : 50);
+        });
+        ui.on(el, 'click', '[data-alldates]', () => { datesTouched = true; setDates('', ''); load(); });
         ui.on(el, 'click', '[data-sort]', (e, b) => { const k = b.dataset.sort; sort = { key: k, dir: sort.key === k ? -sort.dir : -1 }; draw(); });
-        ui.on(el, 'click', '[data-csv]', () => ui.csv(`sales-${f.from}-${f.to}.csv`, ['Invoice', 'Date', 'Customer', 'Status', 'Total', 'Paid', 'Due', 'Returned', 'Cashier'], data.sales.map(s => [s.number, fmt.dateTime(s.date), s.customerName, (STATUS[s.status] || [s.status])[0], s.total / 100, s.paid / 100, s.due / 100, s.returnedTotal / 100, s.cashierName])));
+        ui.on(el, 'click', '[data-csv]', () => ui.csv(`sales-${f.from || 'all'}-${f.to || 'dates'}.csv`, ['Invoice', 'Date', 'Customer', 'Phone', 'Status', 'Total', 'Paid', 'Due', 'Returned', 'Cashier'], data.sales.map(s => [s.number, fmt.dateTime(s.date), s.customerName, s.customerPhone, (STATUS[s.status] || [s.status])[0], s.total / 100, s.paid / 100, s.due / 100, s.returnedTotal / 100, s.cashierName])));
+        // a click on the row opens the invoice; the ⋯ button has every action
+        ui.on(el, 'click', '[data-row]', (e, tr) => { if (e.target.closest('[data-menu], button, a')) return; openSale(tr.dataset.row).then(s => HP.receipt.preview(s)).catch(ui.fail); });
         ui.on(el, 'click', '[data-menu]', (e, b) => {
             const id = b.dataset.menu;
+            const row = data.sales.find(s => s.id === id) || {};
             ui.menu(b, [
-                { label: 'View Details', iconName: 'eye', onClick: () => api.get('/api/pos/sales/' + id).then(s => HP.receipt.preview(s)).catch(ui.fail) },
-                { label: 'Print Invoice', iconName: 'printer', onClick: () => api.get('/api/pos/sales/' + id).then(s => HP.receipt.printSale(s)).catch(ui.fail) },
-                { label: 'Download PDF', iconName: 'download', onClick: () => api.get('/api/pos/sales/' + id).then(s => { ui.toast('Choose "Save as PDF" as the printer.', 'info'); HP.receipt.printSale(s); }).catch(ui.fail) },
-                has('sales.delete') && { label: 'Sales Return', iconName: 'rotate', onClick: () => HP.router.navigate('/sales-return?invoice=' + encodeURIComponent((data.sales.find(s => s.id === id) || {}).number || '')) },
+                { label: 'View Invoice', iconName: 'eye', onClick: () => openSale(id).then(s => HP.receipt.preview(s)).catch(ui.fail) },
+                { label: 'Print / Reprint Invoice', iconName: 'printer', onClick: () => openSale(id).then(s => HP.receipt.printSale(s)).catch(ui.fail) },
+                { label: 'Download PDF', iconName: 'download', onClick: () => openSale(id).then(s => { ui.toast('Choose "Save as PDF" as the printer.', 'info'); HP.receipt.printSale(s); }).catch(ui.fail) },
+                HP.khata && { label: 'Send on WhatsApp', iconName: 'arrowRight', onClick: () => openSale(id).then(s => HP.receipt.sendWhatsApp(s, row.customerPhone)).catch(ui.fail) },
+                { label: 'Share bill picture', iconName: 'image', onClick: () => openSale(id).then(s => HP.receipt.sharePicture(s)).catch(ui.fail) },
+                { label: 'View Payment History', iconName: 'wallet', onClick: () => openSale(id).then(paymentsDialog).catch(ui.fail) },
+                { label: 'View Purchased Products', iconName: 'package', onClick: () => openSale(id).then(itemsDialog).catch(ui.fail) },
+                has('sales.delete') && { label: 'Sales Return', iconName: 'rotate', onClick: () => HP.router.navigate('/sales-return?invoice=' + encodeURIComponent(row.number || '')) },
             ]);
         });
         await load();
+        setTimeout(() => el.querySelector('[data-f=q]')?.focus(), 30);
     },
 });
 

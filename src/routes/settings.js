@@ -38,6 +38,11 @@ const READ = {
         if (has(b, 'taxId')) o.taxId = str(b.taxId, 60);
         if (has(b, 'address')) o.address = str(b.address, 300);
         if (has(b, 'logo')) o.logo = readLogo(b.logo);
+        if (has(b, 'whatsapp')) {
+            o.whatsapp = str(b.whatsapp, 30);
+            const d = o.whatsapp.replace(/\D/g, '');
+            if (o.whatsapp && (d.length < 10 || d.length > 15)) throw new HttpError(400, 'Enter the WhatsApp number like 0300-1234567 or +92 300 1234567.');
+        }
         return o;
     },
     receipt(b) {
@@ -47,7 +52,7 @@ const READ = {
         if (has(b, 'template')) o.template = oneOf(b.template, ['STANDARD', 'COMPACT', 'SUPERMARKET'], 'Visual template');
         if (has(b, 'brandColor')) { o.brandColor = str(b.brandColor, 9); if (!/^#[0-9a-fA-F]{6}$/.test(o.brandColor)) throw new HttpError(400, 'Brand color must look like #4F46E5.'); o.brandColor = o.brandColor.toUpperCase(); }
         if (has(b, 'font')) o.font = oneOf(b.font, ['Inter', 'Roboto', 'Georgia', 'Times New Roman'], 'Typography');
-        for (const k of ['showLogo', 'showTaxId', 'showCustomer', 'showMrp', 'showSavings', 'amountInWords', 'showTerms', 'showQr', 'showPrevBalance', 'showBank', 'showCashier', 'showSignature', 'autoPrint']) if (has(b, k)) o[k] = bool(b[k]);
+        for (const k of ['showLogo', 'showTaxId', 'showCustomer', 'showMrp', 'showSavings', 'amountInWords', 'showTerms', 'showQr', 'showPrevBalance', 'showBank', 'showCashier', 'showSignature', 'autoPrint', 'showBarcode', 'showWhatsappQr']) if (has(b, k)) o[k] = bool(b[k]);
         if (has(b, 'qrType')) o.qrType = oneOf(b.qrType, ['STANDARD', 'PAYMENT', 'TAX'], 'QR Code Type');
         if (has(b, 'copies')) { const n = num(b.copies, 'Default Print Copies', { min: 1, max: 3, allowEmpty: false }); if (!Number.isInteger(n)) throw new HttpError(400, 'Default Print Copies must be 1, 2 or 3.'); o.copies = n; }
         if (has(b, 'bankDetails')) o.bankDetails = str(b.bankDetails, 500);

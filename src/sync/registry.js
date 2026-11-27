@@ -11,7 +11,7 @@ const BOTH = [
     'Payment', 'ExpenseCategory', 'Expense', 'Cheque', 'CapitalTxn', 'Tax',
     'Employee', 'Shift', 'Attendance', 'LeaveRequest', 'Payslip', 'Advance', 'JobPosting', 'Candidate',
     'Appraisal', 'Disciplinary', 'AssetAssignment',
-    'PaymentPromise', 'MessageLog', 'DayClose', 'VendorDue',
+    'PaymentPromise', 'MessageLog', 'DayClose', 'VendorDue', 'StockPriceLog',
 ];
 // PULL: only the server changes them (the super admin manages users and the client); PCs receive them
 const PULL_ONLY = ['Tenant', 'User'];

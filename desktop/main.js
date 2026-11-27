@@ -1,7 +1,7 @@
 // HisabPro desktop (Windows) — Electron main process.
 // It runs the same HisabPro server inside the app (MODE=desktop, a SQLite file in the user's AppData folder) on
 // 127.0.0.1, opens it in a window, and the built-in sync worker keeps it in step with the cloud whenever online.
-const { app, BrowserWindow, ipcMain, Menu, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, shell, dialog, clipboard, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -53,8 +53,9 @@ async function boot() {
         webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     win.once('ready-to-show', () => { if (process.env.HP_HIDDEN) return; win.maximize(); win.show(); });
-    // links to other sites open in the normal browser, never inside the app
-    win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+    // links to other sites open in the normal browser, never inside the app; whatsapp: links open WhatsApp Desktop
+    // (chosen in the WhatsApp dialog as "WhatsApp app")
+    win.webContents.setWindowOpenHandler(({ url }) => { if (/^(https?|whatsapp):/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
     // compared by origin: a prefix test would let http://127.0.0.1:<port>@other.site or port <port>5 load inside the app
     const own = `http://127.0.0.1:${port}`;
     const originOf = u => { try { return new URL(u).origin; } catch { return ''; } };
@@ -72,6 +73,14 @@ ipcMain.handle('print-silent', event => new Promise(resolve => {
     event.sender.print({ silent: true, printBackground: true }, (ok, reason) => resolve({ ok, reason }));
 }));
 ipcMain.handle('app-info', () => ({ version: app.getVersion(), dataFolder: userData }));
+// a bill slip picture onto the Windows clipboard (then Ctrl+V in the WhatsApp chat pastes it)
+ipcMain.handle('copy-image', (event, dataUrl) => {
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,') || dataUrl.length > 15e6) return { ok: false };
+    const img = nativeImage.createFromDataURL(dataUrl);
+    if (img.isEmpty()) return { ok: false };
+    clipboard.writeImage(img);
+    return { ok: true };
+});
 
 // ── app updates (Settings → App update) ──
 // New versions are published as GitHub releases (see docs/DEV.md). The app checks quietly on start and every 6 hours;

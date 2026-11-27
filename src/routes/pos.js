@@ -147,7 +147,9 @@ router.post('/sales', SELL, async (req, res) => {
                 if (!serial) throw new HttpError(400, `Line ${i + 1}: pick the serial / IMEI of "${p.name}".`);
                 if (qty !== 1) throw new HttpError(400, `Line ${i + 1}: a serialized item is sold one serial per line.`);
             }
-            return { p, qty, factor, unitId, unitName, price, lineDiscount: paisa(it.lineDiscount, `Line ${i + 1} discount`), serial, note: str(it.note, 200) };
+            // each line may be sold at retail or wholesale (the POS W button); a line that says nothing follows the bill
+            const linePrice = it.priceMode === 'WHOLESALE' || it.priceMode === 'RETAIL' ? it.priceMode : priceMode;
+            return { p, qty, factor, unitId, unitName, price, linePrice, lineDiscount: paisa(it.lineDiscount, `Line ${i + 1} discount`), serial, note: str(it.note, 200) };
         });
         // unit names for the receipt
         const unitIds = [...new Set(lines.map(l => l.unitId).filter(Boolean))];
@@ -156,9 +158,9 @@ router.post('/sales', SELL, async (req, res) => {
             l.unitName = units[l.unitId] || '';
             if (l.price === null) {
                 // default price: alternate unit's own price, else the base price ÷ factor (wholesale when chosen and set)
-                const base = priceMode === 'WHOLESALE' && l.p.wholesalePrice !== null ? N(l.p.wholesalePrice) : N(l.p.retailPrice);
+                const wholesale = l.linePrice === 'WHOLESALE' && l.p.wholesalePrice !== null && N(l.p.wholesalePrice) > 0;
+                const base = wholesale ? N(l.p.wholesalePrice) : N(l.p.retailPrice);
                 const alt = l.factor !== 1 ? parseUnits(l.p.altUnits).find(x => x.unitId === l.unitId) : null;
-                const wholesale = priceMode === 'WHOLESALE' && l.p.wholesalePrice !== null;
                 l.price = alt && alt.price && !wholesale ? Number(alt.price) : Math.round(base / l.factor * 10000) / 10000;
             }
         }
@@ -252,15 +254,25 @@ router.post('/sales', SELL, async (req, res) => {
 // balance of the sale's customer before and after (for "Show Previous Balance" on the receipt)
 async function withBalance(t, s) {
     if (!s.customerId) return s;
-    const now = await ledger.balance(t, s.customerId, false);
-    return { ...s, customerBalance: now };
+    const [now, party] = await Promise.all([ledger.balance(t, s.customerId, false), prisma.party.findFirst({ where: { id: s.customerId, tenantId: t }, select: { phone: true } })]);
+    return { ...s, customerBalance: now, customerPhone: party ? party.phone : '' };
 }
 
 router.get('/sales', VIEW, async (req, res) => {
     const t = req.user.tenantId;
     const where = { tenantId: t, deletedAt: null };
     const q = str(req.query.q, 80);
-    if (q) where.OR = [{ number: ci(q) }, { customerName: ci(q) }];
+    if (q) {
+        // invoice number, customer name, or part of the customer's mobile (0300-1234567 / 03001234567 / 1234567 all match)
+        where.OR = [{ number: ci(q) }, { customerName: ci(q) }];
+        const digits = q.replace(/\D/g, '');
+        if (digits.length >= 3) {
+            const tail = digits.replace(/^(0092|92|0)/, '');
+            const phones = await prisma.party.findMany({ where: { tenantId: t, type: 'CUSTOMER', deletedAt: null, phone: { not: '' } }, select: { id: true, phone: true } });
+            const ids = phones.filter(p => String(p.phone).replace(/\D/g, '').includes(tail || digits)).map(p => p.id);
+            if (ids.length) where.OR.push({ customerId: { in: ids.slice(0, 5000) } });
+        }
+    }
     if (req.query.status) where.status = String(req.query.status) === 'REFUNDED' ? { in: ['REFUNDED', 'PARTIAL_REFUND'] } : String(req.query.status);
     if (req.query.from || req.query.to) {
         const tz = (await settings.get(t, 'localization')).timezone;
@@ -272,8 +284,10 @@ router.get('/sales', VIEW, async (req, res) => {
     const list = await prisma.sale.findMany({ where, orderBy: { date: 'desc' }, take: Math.min(Number(req.query.limit) || 1000, 5000) });
     // the totals count every matching sale, not only the ones listed (the list stops at its limit)
     const all = await prisma.sale.aggregate({ where, _count: true, _sum: { total: true, returnedTotal: true, due: true } });
+    const custIds = [...new Set(list.map(s => s.customerId).filter(Boolean))];
+    const phoneOf = Object.fromEntries((custIds.length ? await prisma.party.findMany({ where: { tenantId: t, id: { in: custIds } }, select: { id: true, phone: true } }) : []).map(p => [p.id, p.phone]));
     res.json({
-        sales: list.map(s => ({ id: s.id, number: s.number, date: s.date, customerName: s.customerName, status: s.status, mode: s.mode, total: N(s.total), due: N(s.due), paid: N(s.paid), returnedTotal: N(s.returnedTotal), cashierName: s.cashierName, itemsCount: s.itemsCount })),
+        sales: list.map(s => ({ id: s.id, number: s.number, date: s.date, customerId: s.customerId, customerName: s.customerName, customerPhone: s.customerId ? phoneOf[s.customerId] || '' : '', status: s.status, mode: s.mode, total: N(s.total), due: N(s.due), paid: N(s.paid), returnedTotal: N(s.returnedTotal), cashierName: s.cashierName, itemsCount: s.itemsCount })),
         summary: { count: all._count, revenue: N(all._sum.total) - N(all._sum.returnedTotal), due: N(all._sum.due), listed: list.length },
     });
 });

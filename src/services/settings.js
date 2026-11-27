@@ -2,12 +2,15 @@
 const { prisma } = require('../db');
 
 const DEFAULTS = {
-    company: { name: '', phone: '', email: '', taxId: '', address: '', logo: '' },
+    company: { name: '', phone: '', email: '', taxId: '', address: '', logo: '', whatsapp: '' },
     receipt: {
         paper: 'THERMAL', width: '80', template: 'STANDARD', brandColor: '#4f46e5', font: 'Inter',
         showLogo: true, showTaxId: true, showCustomer: true, showMrp: true, showSavings: true, amountInWords: true,
         showTerms: true, showQr: false, showPrevBalance: false, showBank: false, showCashier: true, showSignature: false,
         qrType: 'STANDARD', autoPrint: false, copies: 1, bankDetails: '',
+        // thermal receipt: the invoice-number barcode at the end (off: shops asked for it to go), and a QR code that opens
+        // the shop's WhatsApp chat (printed only once Company Profile → WhatsApp number is filled in)
+        showBarcode: false, showWhatsappQr: true,
     },
     numbering: {
         invoicePrefix: 'INV-', purchasePrefix: 'PUR-',
@@ -28,8 +31,8 @@ const DEFAULTS = {
         balanceEn: 'Dear {name},\n\nYour balance in the {shop} khata is {balance}.\n\nPlease clear it at your earliest convenience.\nContact: {phone}\n{shop}',
         thanksUr: 'محترم {name} 🌹\n\n{shop} میں آپ کی {amount} کی ادائیگی وصول ہو گئی۔ ✅\n\n💰 باقی بقایا: {balance}\n\nشکریہ! 🙏\n{shop}',
         thanksEn: 'Dear {name},\n\nWe have received your payment of {amount} at {shop}. Thank you!\n\nRemaining balance: {balance}\n{shop}',
-        billUr: 'محترم {name} 🌹\n\n{shop} سے آپ کا بل {number}\n🧾 کل رقم: {total}\n✅ ادا شدہ: {paid}\n📌 بقایا: {due}\n\n💰 کل کھاتہ: {balance}\n\nشکریہ! 🙏',
-        billEn: 'Dear {name},\n\nYour bill {number} from {shop}\nTotal: {total}\nPaid: {paid}\nDue: {due}\n\nKhata balance: {balance}\n\nThank you!',
+        billUr: 'محترم {name} 🌹\n\n{shop} سے آپ کا بل {number}\n\n{items}\n\n🧾 کل رقم: {total}\n✅ ادا شدہ: {paid}\n📌 بقایا: {due}\n\n💰 کل کھاتہ: {balance}\n\nشکریہ! 🙏',
+        billEn: 'Dear {name},\n\nYour bill {number} from {shop}\n\n{items}\n\nTotal: {total}\nPaid: {paid}\nDue: {due}\n\nKhata balance: {balance}\n\nThank you!',
     },
 };
 const KEYS = Object.keys(DEFAULTS);

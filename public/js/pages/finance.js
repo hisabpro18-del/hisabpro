@@ -92,7 +92,7 @@ HP.page('/payments', {
         });
         onSort(el, st, draw);
         ui.on(el, 'click', '[data-new]', () => paymentDrawer('IN', load));
-        ui.on(el, 'click', '[data-print]', (e, b) => printReceipt(list.find(p => p.id === b.dataset.print)));
+        ui.on(el, 'click', '[data-print]', (e, b) => api.get('/api/finance/payments/' + b.dataset.print).then(HP.receipt.printPayment).catch(ui.fail));
         ui.on(el, 'click', '[data-del]', async (e, b) => {
             const p = list.find(x => x.id === b.dataset.del);
             if (!(await ui.confirm({ title: `Delete ${p.number}?`, message: `The ${fmt.money(p.amount)} is taken back out of ${p.accountName || 'the account'}${p.partyName ? ` and ${p.partyName}'s ledger entry is reversed` : ''}.`, ok: 'Delete', danger: true }))) return;
@@ -131,7 +131,8 @@ async function paymentDrawer(direction, onDone, partyId) {
             ${ui.field({ label: 'Amount', name: 'amount', money: true, required: true, half: true })}
             ${ui.field({ label: 'Date', name: 'date', type: 'date', value: fmt.ymd(), half: true })}
             ${ui.field({ label: 'Reference', name: 'reference', placeholder: 'Optional reference (slip / transaction no.)' })}
-            ${ui.field({ label: 'Note', name: 'note', placeholder: 'Optional note' })}</div>`,
+            ${ui.field({ label: 'Note', name: 'note', placeholder: 'Optional note' })}
+            ${ui.field({ label: 'Print the receipt after saving (with the remaining balance)', name: 'printIt', type: 'checkbox', value: HP.receipt.autoPayPrint() })}</div>`,
         onMount(form) {
             const showBal = () => {
                 const p = parties.find(x => x.id === form.querySelector('[data-party]').value);
@@ -161,22 +162,15 @@ async function paymentDrawer(direction, onDone, partyId) {
                 await api.post('/api/finance/cheques', { type: v.direction === 'IN' ? 'RECEIVED' : 'ISSUED', partyId: v.partyId, chequeNo: v.chequeNo, bankName: v.bankName, amount: v.amount, issueDate: v.date, dueDate: v.dueDate, note: [v.reference, v.note].filter(Boolean).join(' · ') });
                 d.close(); ui.toast('Cheque recorded as pending — clear it on the Cheques screen when it is honoured.'); return onDone();
             }
+            const printIt = v.printIt; delete v.printIt;
+            HP.receipt.autoPayPrint(printIt);
             const r = await api.post('/api/finance/payments', v);
-            d.close(); ui.toast(`${r.number} saved: ${fmt.money(r.amount)}`); onDone();
+            d.close();
+            ui.toast(`${r.number} saved: ${fmt.money(r.amount)}${r.balance !== null && r.balance !== undefined ? ` · ${r.partyType === 'VENDOR' ? 'payable' : 'balance'} now ${fmt.money(r.balance)}` : ''}`);
+            if (printIt) HP.receipt.printPayment(r);
+            onDone();
         },
     });
-}
-
-function printReceipt(p) {
-    const inn = p.direction === 'IN';
-    ui.print(html`<div class="receipt w80" style="padding:2mm">
-      <div style="text-align:center;font-weight:700;font-size:14px">${companyName()}</div>
-      <div style="text-align:center;margin:4px 0">${inn ? 'PAYMENT RECEIPT' : 'PAYMENT VOUCHER'}</div><hr>
-      <div>No: ${p.number}</div><div>Date: ${fmt.dateTime(p.date)}</div><div>${inn ? 'Received from' : 'Paid to'}: ${p.partyName || (inn ? 'Other income' : 'Other payout')}</div>
-      <div>Method: ${METHOD[p.method] || p.method}${p.accountName ? ` (${p.accountName})` : ''}</div>${p.reference ? html`<div>Ref: ${p.reference}</div>` : ''}${p.note ? html`<div>Note: ${p.note}</div>` : ''}<hr>
-      <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px"><span>Amount</span><span>${fmt.money(p.amount)}</span></div>
-      <div style="font-size:10px;margin-top:2px">${window.Calc.words(p.amount)}</div><hr>
-      <div style="margin-top:24px;border-top:1px solid #000;text-align:center;padding-top:2px">Signature</div></div>`);
 }
 
 // ═════════════════════════ Capital & Equity ═════════════════════════

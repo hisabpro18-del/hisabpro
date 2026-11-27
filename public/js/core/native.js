@@ -51,6 +51,11 @@
         .receipt.w58{width:54mm}.receipt.w80{width:72mm}.receipt hr{border:0;border-top:1px dashed #000;margin:6px 0}
         .receipt table{border-collapse:collapse;width:100%}.receipt td{padding:0}.receipt img{max-width:100%}`;
     async function receiptPicture(el, dots) {
+        const { g, H } = await receiptCanvas(el, dots);
+        return EscPos.trim(EscPos.toMono(g.getImageData(0, 0, dots, H).data, dots, H));
+    }
+    // the receipt drawn on a white canvas `dots` wide (its height follows the receipt)
+    async function receiptCanvas(el, dots) {
         const box = document.createElement('div');
         box.style.cssText = 'position:fixed;left:-20000px;top:0;background:#fff;pointer-events:none';
         const clone = el.cloneNode(true);
@@ -68,8 +73,47 @@
             const g = c.getContext('2d');
             g.fillStyle = '#fff'; g.fillRect(0, 0, dots, H);
             g.drawImage(img, 0, 0, dots, H);
-            return EscPos.trim(EscPos.toMono(g.getImageData(0, 0, dots, H).data, dots, H));
+            return { c, g, H };
         } finally { box.remove(); }
+    }
+    // a receipt as a PNG picture (to share on WhatsApp): sharp at 576 px wide, blank paper below the last line cut off
+    async function receiptImage(el) {
+        const dots = 576;
+        const { c, g, H } = await receiptCanvas(el, dots);
+        const used = EscPos.trim(EscPos.toMono(g.getImageData(0, 0, dots, H).data, dots, H), 16).height;
+        const out = document.createElement('canvas'); out.width = dots + 32; out.height = Math.min(H, used) + 16;
+        const o = out.getContext('2d');
+        o.fillStyle = '#fff'; o.fillRect(0, 0, out.width, out.height);
+        o.drawImage(c, 0, 0, dots, out.height - 16, 16, 16, dots, out.height - 16);
+        return new Promise((res, rej) => out.toBlob(b => (b ? res(b) : rej(new Error('The picture could not be made.'))), 'image/png'));
+    }
+    // share a receipt picture: the Android app → share sheet (choose WhatsApp); a phone browser → its share sheet;
+    // a computer → copied, to paste (Ctrl+V) into the WhatsApp chat, or saved as a file when copying is not allowed
+    async function shareReceipt(el, name) {
+        const blob = await receiptImage(el);
+        const filename = `${String(name || 'bill').replace(/[^\w.-]+/g, '-')}.png`;
+        if (isApp()) return shareBlob(blob, filename);
+        const file = typeof File === 'function' ? new File([blob], filename, { type: 'image/png' }) : null;
+        if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+            try { await navigator.share({ files: [file], title: name || 'Bill' }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+        }
+        try {
+            await copyImage(blob);
+            ui.toast(t('Bill picture copied. Open the WhatsApp chat and paste it (Ctrl+V).'));
+        } catch {
+            ui.saveBlob(blob, filename);
+            ui.toast(t('Bill picture saved. Attach it in the WhatsApp chat.'));
+        }
+    }
+    // a picture onto the clipboard: the Windows app through its own bridge (works even when the page is not focused),
+    // a browser through the Clipboard API. Throws when neither can.
+    async function copyImage(blob) {
+        if (window.hpDesktop && window.hpDesktop.copyImage) {
+            const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(blob); });
+            const r = await window.hpDesktop.copyImage(dataUrl);
+            if (r && r.ok) return;
+        }
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
     }
 
     async function printToBluetooth(receipts, p) {
@@ -299,6 +343,6 @@
     const forced = () => { try { return localStorage.getItem('hp.mobileMode') === '1'; } catch { return false; } };
     HP.mobile = { on: () => isApp() || forced() };
 
-    HP.native = { isApp, scan, choosePrinter, testPrint, print, systemPrint, shareBlob, versions, settingsCard, printer, paper, syncAlarms, refreshAlarms };
+    HP.native = { isApp, scan, choosePrinter, testPrint, print, systemPrint, shareBlob, receiptImage, shareReceipt, copyImage, versions, settingsCard, printer, paper, syncAlarms, refreshAlarms };
     document.addEventListener('DOMContentLoaded', init);
 })();

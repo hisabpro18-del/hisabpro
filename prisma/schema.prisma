@@ -234,6 +234,32 @@ model Product {
   @@index([tenantId, barcode])
 }
 
+// Stock & Price Management history: each change of a retail / wholesale / cost price or of the stock, with the value
+// before and after, who made it and why. Stock itself stays Σ StockMovement (a stock change writes its movement too).
+model StockPriceLog {
+  id          String    @id @default(uuid())
+  tenantId    String
+  productId   String
+  productName String    @default("")
+  field       String // RETAIL | WHOLESALE | COST | STOCK
+  oldPrice    BigInt? // paisa per base unit (price fields; null = no wholesale price)
+  newPrice    BigInt?
+  oldQty      Float? // base units (STOCK)
+  newQty      Float?
+  reason      String    @default("") // PRICE | OPENING | PURCHASE | RETURN | DAMAGED | ADJUSTMENT
+  note        String    @default("")
+  batchId     String? // the changes saved together (one bulk update)
+  userId      String?
+  userName    String    @default("")
+  date        DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([tenantId, date])
+  @@index([tenantId, productId])
+}
+
 // Serial / IMEI of one unit of a SERIAL product
 model ProductSerial {
   id         String    @id @default(uuid())

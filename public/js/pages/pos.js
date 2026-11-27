@@ -3,7 +3,8 @@
 const { html, raw, icon, api, ui, fmt, t } = HP;
 
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); }));
-const prefs = () => { try { return { view: 'VISUAL', wholesale: false, ...JSON.parse(localStorage.getItem('hp.pos') || '{}') }; } catch { return { view: 'VISUAL', wholesale: false }; } };
+// this device's own choices; what is not chosen here yet comes from Settings → Receipt & POS (Wholesale Mode, Default POS screen)
+const prefs = () => { try { return JSON.parse(localStorage.getItem('hp.pos') || '{}') || {}; } catch { return {}; } };
 const savePrefs = p => { try { localStorage.setItem('hp.pos', JSON.stringify(p)); } catch { } };
 // an unfinished cart survives leaving the screen in the app and the re-draw done by night mode / English–اردو
 let posDraft = null;
@@ -13,20 +14,29 @@ HP.page('/pos', {
     async render(el) {
         const [boot, catalog] = await Promise.all([api.get('/api/pos/bootstrap'), api.get('/api/inventory/catalog')]);
         const P = prefs();
-        let cat = 'ALL', q = '';
-        const fresh = () => ({ clientId: uuid(), lines: [], mode: 'WALKIN', customer: null, customerName: 'Walk-in Customer', discountType: 'AMOUNT', discountValue: '', split: false, payments: [{ method: 'CASH', amount: '' }], splitAmounts: { CASH: '', CARD: '', BANK: '' } });
-        let cart = posDraft || fresh();
+        if (P.wholesale === undefined) P.wholesale = !!(boot.pos && boot.pos.wholesaleMode);
+        if (P.view === undefined) P.view = boot.pos && boot.pos.defaultMode === 'BARCODE' ? 'RETAIL' : 'VISUAL';
+        let cat = 'ALL', q = '', hi = -1; // hi: the search result picked with the ↓ ↑ keys (Enter adds it)
+        const fresh = () => ({ clientId: uuid(), lines: [], mode: 'WALKIN', customer: null, customerName: 'Walk-in Customer', priceMode: P.wholesale ? 'WHOLESALE' : 'RETAIL', discountType: 'AMOUNT', discountValue: '', split: false, payments: [{ method: 'CASH', amount: '' }], splitAmounts: { CASH: '', CARD: '', BANK: '' } });
+        // a cart from before per-line prices (kept draft, held sale) gets the bill's mode on every line
+        const normalize = c => { if (!c.priceMode) c.priceMode = P.wholesale || (c.customer && c.customer.group === 'WHOLESALE') ? 'WHOLESALE' : 'RETAIL'; for (const l of c.lines) if (!l.pm) l.pm = c.priceMode; return c; };
+        let cart = normalize(posDraft || fresh());
         posDraft = null;
         let busy = false;
         const byId = Object.fromEntries(catalog.map(p => [p.id, p]));
-        const priceMode = () => (P.wholesale || (cart.customer && cart.customer.group === 'WHOLESALE') ? 'WHOLESALE' : 'RETAIL');
-        const basePrice = p => (priceMode() === 'WHOLESALE' && p.wholesalePrice ? p.wholesalePrice : p.retailPrice);
-        const unitPrice = (p, unitId) => {
-            if (!unitId || unitId === p.baseUnitId) return basePrice(p);
+        // Prices: each line is sold at Retail or Wholesale (the W button on the line); the Retail / Wholesale switch sets
+        // every line of the bill at once. A product without a wholesale price is sold at its retail price.
+        const hasWholesale = p => !!(p && Number(p.wholesalePrice) > 0);
+        const basePrice = (p, mode = cart.priceMode) => (mode === 'WHOLESALE' && hasWholesale(p) ? p.wholesalePrice : p.retailPrice);
+        const unitPrice = (p, unitId, mode = cart.priceMode) => {
+            if (!unitId || unitId === p.baseUnitId) return basePrice(p, mode);
             const u = (p.altUnits || []).find(x => x.unitId === unitId);
-            const wholesale = priceMode() === 'WHOLESALE' && p.wholesalePrice;
-            return u && u.price && !wholesale ? u.price : basePrice(p) / (u ? Number(u.factor) || 1 : 1); // exact: the line total is rounded, not the unit price
+            const wholesale = mode === 'WHOLESALE' && hasWholesale(p);
+            return u && u.price && !wholesale ? u.price : basePrice(p, mode) / (u ? Number(u.factor) || 1 : 1); // exact: the line total is rounded, not the unit price
         };
+        const lineMode = l => l.pm || cart.priceMode;
+        // the bill's switch shows Retail or Wholesale when every line agrees, neither when they are mixed
+        const billMode = () => (!cart.lines.length ? cart.priceMode : cart.lines.every(l => lineMode(l) === 'WHOLESALE') ? 'WHOLESALE' : cart.lines.every(l => lineMode(l) === 'RETAIL') ? 'RETAIL' : 'MIXED');
 
         // ── totals (the same maths the server uses) ──
         const totals = () => {
@@ -76,12 +86,12 @@ HP.page('/pos', {
         }
         function productsHtml(list) {
             if (!list.length) return ui.empty({ iconName: 'package', title: catalog.length ? 'No products match' : 'No products yet', text: catalog.length ? 'Try another search or category.' : 'Add products under Inventory → Products.' });
-            if (P.view === 'RETAIL') return html`<div class="card overflow-hidden"><table class="tbl"><thead><tr><th>SKU / Barcode</th><th>Name</th><th class="!text-right">Price</th><th class="!text-right">Stock</th></tr></thead><tbody>${list.map(p => html`<tr class="cursor-pointer ${p.type !== 'SERVICE' && p.stock <= 0 ? 'text-muted' : ''}" data-add="${p.id}"><td class="font-mono text-xs text-muted">${p.barcode || p.sku || '—'}</td><td>${p.name}</td><td class="num">${fmt.money(basePrice(p))}</td><td class="num ${p.type !== 'SERVICE' && p.stock <= 0 ? 'text-bad' : ''}">${p.type === 'SERVICE' ? '—' : fmt.qty(p.stock - inCart(p.id))}</td></tr>`)}</tbody></table></div>`;
-            return html`<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">${list.map(p => {
+            if (P.view === 'RETAIL') return html`<div class="card overflow-hidden"><table class="tbl" data-nopage><thead><tr><th>SKU / Barcode</th><th>Name</th><th class="!text-right">Price</th><th class="!text-right">Stock</th></tr></thead><tbody>${list.map((p, k) => html`<tr class="cursor-pointer ${p.type !== 'SERVICE' && p.stock <= 0 ? 'text-muted' : ''} ${k === hi ? 'bg-accent-soft outline-2 outline-accent' : ''}" data-add="${p.id}" ${k === hi ? raw('data-hi') : ''}><td class="font-mono text-xs text-muted">${p.barcode || p.sku || '—'}</td><td>${p.name}</td><td class="num">${fmt.money(basePrice(p))}</td><td class="num ${p.type !== 'SERVICE' && p.stock <= 0 ? 'text-bad' : ''}">${p.type === 'SERVICE' ? '—' : fmt.qty(p.stock - inCart(p.id))}</td></tr>`)}</tbody></table></div>`;
+            return html`<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">${list.map((p, k) => {
                 const left2 = p.type === 'SERVICE' ? null : Calc.q3(p.stock - inCart(p.id));
                 const out = left2 !== null && left2 <= 0;
                 const n = cart.lines.filter(l => l.productId === p.id).length;
-                return html`<button type="button" class="group relative flex flex-col overflow-hidden rounded-xl border border-line bg-surface text-left transition hover:border-slate-400 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary/30" data-add="${p.id}">
+                return html`<button type="button" class="group relative flex flex-col overflow-hidden rounded-xl border bg-surface text-left transition hover:border-slate-400 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary/30 ${k === hi ? 'border-accent ring-2 ring-accent' : 'border-line'}" data-add="${p.id}" ${k === hi ? raw('data-hi') : ''}>
                   <div class="relative flex h-24 items-center justify-center bg-surface-2">${p.imageUrl ? html`<img src="${p.imageUrl}" class="h-full w-full object-cover" alt="" loading="lazy">` : icon('box', 'w-9 h-9 text-faint')}
                     ${left2 === null ? '' : out ? html`<span class="absolute end-2 top-2 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-600">Out</span>` : html`<span class="absolute end-2 top-2 rounded-full border border-line bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">${fmt.qty(left2)} in stock</span>`}
                     ${n ? html`<span class="absolute bottom-2 start-2 rounded-full bg-accent px-2 py-0.5 text-[11px] font-semibold text-white">${n} in cart</span>` : ''}</div>
@@ -101,7 +111,8 @@ HP.page('/pos', {
               <div class="flex items-center justify-between px-5 pt-5"><h2 class="text-lg font-semibold">${t('Current Sale')}</h2>
                 <div class="flex items-center gap-1">${has ? html`<button class="btn btn-sm btn-ghost" data-hold>${icon('pause')}${t('Hold')}</button><button class="btn btn-sm btn-ghost" data-estimate>${icon('printer')}Print Estimate</button><button class="btn-icon !w-8 !h-8 border-0 !text-rose-600" data-clear aria-label="Clear cart">${icon('trash')}</button>` : ''}
                 <button class="btn-icon !w-8 !h-8" data-settings aria-label="POS settings">${icon('settings')}</button></div></div>
-              <div class="px-5 pt-2">${credit ? html`<span class="badge border-amber-300 bg-amber-50 text-amber-700">${cart.customer ? `Credit (Udhar) — ${cart.customer.name}` : 'Credit (Udhar) — no customer'}</span>` : html`<span class="badge badge-gray">Walk-in</span>`}${priceMode() === 'WHOLESALE' ? html` <span class="badge badge-accent">Wholesale prices</span>` : ''}</div>
+              <div class="px-5 pt-2">${credit ? html`<span class="badge border-amber-300 bg-amber-50 text-amber-700">${cart.customer ? `Credit (Udhar) — ${cart.customer.name}` : 'Credit (Udhar) — no customer'}</span>` : html`<span class="badge badge-gray">Walk-in</span>`}</div>
+              <div class="flex items-center justify-between gap-2 px-5 pt-3"><span class="text-xs text-muted">${t('Prices for the whole bill')}</span>${ui.seg('price', [['RETAIL', t('Retail')], ['WHOLESALE', t('Wholesale')]], billMode())}</div>
               <div class="px-5 pt-3">${ui.seg('mode', [['WALKIN', t('Walk-in Customer')], ['CREDIT', t('Credit (Udhar)')]], cart.mode)}</div>
               <div class="px-5 pt-3">${credit ? html`<div class="relative"><input class="input pe-10" placeholder="Customer…" data-cust value="${cart.customer ? cart.customer.name : ''}" autocomplete="off"><span class="kbd absolute end-2 top-2.5">F2</span></div>
                   ${cart.customer ? html`<div class="mt-1.5 flex items-center justify-between text-xs"><span class="text-muted">${cart.customer.phone || ''}</span><span>Balance <b class="${cart.customer.balance > 0 ? 'text-warn' : ''}">${fmt.money(cart.customer.balance)}</b>${cart.customer.creditLimit ? html` · limit ${fmt.money(cart.customer.creditLimit)}` : ''}</span></div>
@@ -114,10 +125,11 @@ HP.page('/pos', {
                       <div class="flex items-center gap-1"><button class="btn-icon !h-7 !w-7" data-dec="${i}" aria-label="Less">${icon('minus', 'w-3.5 h-3.5')}</button>
                         <div class="w-14 text-center"><div class="text-sm font-semibold tabular-nums">${fmt.qty(l.qty)}</div>${l.unitName ? html`<div class="text-[10px] leading-none text-muted">${l.unitName}</div>` : ''}</div>
                         <button class="btn-icon !h-7 !w-7" data-inc="${i}" aria-label="More">${icon('plus', 'w-3.5 h-3.5')}</button>
-                        <button class="ms-1 flex h-7 w-7 items-center justify-center rounded-full border border-line text-[11px] font-bold text-muted hover:bg-surface-2" data-w="${i}" title="Amount / weight">W</button></div>
+                        <button class="ms-1 flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-bold ${lineMode(l) === 'WHOLESALE' && hasWholesale(byId[l.productId]) ? 'border-accent bg-accent text-white' : 'border-line text-muted hover:bg-surface-2'}" data-ws="${i}" aria-pressed="${lineMode(l) === 'WHOLESALE' ? 'true' : 'false'}" title="${lineMode(l) === 'WHOLESALE' ? 'Wholesale price: click for the retail price' : hasWholesale(byId[l.productId]) ? `Retail price: click for the wholesale price (${fmt.money(unitPrice(byId[l.productId], l.unitId, 'WHOLESALE'))})` : 'No wholesale price is saved for this product'}">W</button>
+                        <button class="flex h-7 w-7 items-center justify-center rounded-full border border-line text-[10px] font-bold text-muted hover:bg-surface-2" data-w="${i}" title="Sell by amount / weight">Rs</button></div>
                       <div class="w-24 text-right text-sm font-bold tabular-nums">${fmt.money(tt.lines[i].total)}</div>
                       <button class="text-muted hover:text-rose-600" data-rm="${i}" aria-label="Remove item">${icon('trash')}</button></div>
-                    <div class="mt-1 flex items-center justify-between"><button class="text-[11px] text-muted hover:text-ink" data-note="${i}">+ Note / discount</button><span class="text-[11px] text-muted">${fmt.money(l.price)} each${l.lineDiscount ? ` · disc ${fmt.money(l.lineDiscount)}` : ''}${l.note ? ` · ${l.note}` : ''}${cart.customer && lastPrices[`${l.productId}:${l.unitId || ''}`] ? html` · <button class="text-accent" data-lastrate="${i}" title="Use this customer's last rate">last ${fmt.money(lastPrices[`${l.productId}:${l.unitId || ''}`].price)}</button>` : ''}</span></div></div>`)
+                    <div class="mt-1 flex items-center justify-between"><button class="text-[11px] text-muted hover:text-ink" data-note="${i}">+ Note / discount</button><span class="text-[11px] text-muted">${fmt.money(l.price)} each${lineMode(l) === 'WHOLESALE' && hasWholesale(byId[l.productId]) && !l.custom ? ' · wholesale' : ''}${l.custom ? ' · own price' : ''}${l.lineDiscount ? ` · disc ${fmt.money(l.lineDiscount)}` : ''}${l.note ? ` · ${l.note}` : ''}${cart.customer && lastPrices[`${l.productId}:${l.unitId || ''}`] ? html` · <button class="text-accent" data-lastrate="${i}" title="Use this customer's last rate">last ${fmt.money(lastPrices[`${l.productId}:${l.unitId || ''}`].price)}</button>` : ''}</span></div></div>`)
                 : html`<div class="flex h-full min-h-[120px] items-center justify-center text-sm text-muted">${t('Tap a product to begin')}</div>`}
               </div>
               <div class="border-t border-line px-5 py-2.5 space-y-1.5 text-sm">
@@ -148,7 +160,7 @@ HP.page('/pos', {
             const ci = right.querySelector('[data-cust]');
             if (ci) custAc = ui.autocomplete(ci, {
                 search: async qq => (await api.get('/api/pos/customers', { q: qq })).map(c => ({ ...c, label: c.name, sub: `${c.phone || ''} · balance ${fmt.money(c.balance)}${c.creditLimit ? ' · limit ' + fmt.money(c.creditLimit) : ''}` })),
-                onPick: c => { cart.customer = c; repriceAll(); drawRight(); refreshProducts(); loadLastPrices(c.id); },
+                onPick: c => { cart.customer = c; customerPrices(); drawRight(); refreshProducts(); loadLastPrices(c.id); },
             });
         }
         let custAc = null;
@@ -162,25 +174,99 @@ HP.page('/pos', {
             const unitName = u ? u.name : p.baseUnit || '';
             if (p.type !== 'SERVICE' && !boot.pos.allowNegativeStock && Calc.q3(p.stock - inCart(p.id) - qty / factor) < 0) { ui.toast(`Not enough stock of "${p.name}".`, 'error'); return; }
             if (p.type !== 'SERVICE' && Calc.q3(p.stock - inCart(p.id) - qty / factor) < 0) ui.toast(`"${p.name}" is out of stock — selling anyway (stock goes negative).`, 'info');
-            const same = !serial && cart.lines.find(l => l.productId === p.id && (l.unitId || null) === unitId && !l.weighed);
+            const same = !serial && cart.lines.find(l => l.productId === p.id && (l.unitId || null) === unitId && !l.weighed && lineMode(l) === cart.priceMode);
             if (same && price === undefined) same.qty = Calc.q3(same.qty + qty);
-            else cart.lines.push({ key: uuid(), productId: p.id, name: p.name, variantLabel: p.variantLabel, unitId, unitName, factor, qty: Calc.q3(qty), price: price ?? unitPrice(p, unitId), taxRate: p.taxRate, lineDiscount: 0, note: '', serial: serial || '', weighed: price !== undefined || qty % 1 !== 0 });
-            draw();
+            else cart.lines.push({ key: uuid(), productId: p.id, name: p.name, variantLabel: p.variantLabel, unitId, unitName, factor, qty: Calc.q3(qty), price: price ?? unitPrice(p, unitId), pm: cart.priceMode, taxRate: p.taxRate, lineDiscount: 0, note: '', serial: serial || '', weighed: price !== undefined || qty % 1 !== 0 });
+            // the search box is not redrawn: the cursor stays in it, ready for the next scan
+            refreshProducts(); drawRight();
         }
+        const focusSearch = () => setTimeout(() => { if (!document.querySelector('#overlay-root .modal, #overlay-root .drawer')) left.querySelector('[data-search]')?.focus(); }, 40);
         let lastPrices = {};
         async function loadLastPrices(id) {
             lastPrices = {};
             try { for (const x of await api.get(`/api/pos/customers/${id}/last-prices`)) lastPrices[`${x.productId}:${x.unitId || ''}`] = x; } catch { }
             drawRight();
         }
-        function repriceAll() { for (const l of cart.lines) { const p = byId[l.productId]; if (p && !l.custom) l.price = unitPrice(p, l.unitId); } }
+        function repriceAll() { for (const l of cart.lines) { const p = byId[l.productId]; if (p && !l.custom) l.price = unitPrice(p, l.unitId, lineMode(l)); } }
+        // every line of the bill to one price (auto: chosen because of a wholesale customer, undone when they leave)
+        function setAll(mode, auto = false) {
+            cart.priceMode = mode; cart.autoMode = auto;
+            for (const l of cart.lines) l.pm = mode;
+            repriceAll();
+        }
+        // a WHOLESALE group customer gets wholesale prices; another customer / walk-in goes back to this counter's choice
+        function customerPrices() {
+            if (cart.customer && cart.customer.group === 'WHOLESALE') { if (cart.priceMode !== 'WHOLESALE' || billMode() !== 'WHOLESALE') setAll('WHOLESALE', true); }
+            else if (cart.autoMode) setAll(P.wholesale ? 'WHOLESALE' : 'RETAIL');
+        }
+        // the W button of a line: this one product at its wholesale price (or back to retail)
+        function toggleLineWholesale(i) {
+            const l = cart.lines[i], p = byId[l.productId];
+            if (!l || !p) return;
+            const toW = lineMode(l) !== 'WHOLESALE' || !hasWholesale(p);
+            if (toW && !hasWholesale(p)) return ui.toast(`"${p.name}" has no wholesale price yet. Add it under Inventory → Stock & Price Management.`, 'error');
+            l.pm = toW ? 'WHOLESALE' : 'RETAIL';
+            l.custom = false; // the list price of the chosen kind replaces a typed special price
+            l.price = unitPrice(p, l.unitId, l.pm);
+            drawRight();
+        }
 
         async function pick(p) {
             const qn = pendingQty; pendingQty = null;
             if (p.type === 'SERIAL') return pickSerial(p);
             if (qn && !p.weighed) return addLine(p, { qty: qn });
-            if (p.weighed || (p.altUnits || []).length) return weighDialog(p);
+            if (p.weighed) return weighDialog(p);
+            if ((p.altUnits || []).length) return qtyDialog(p);
             addLine(p);
+        }
+        // CTN / PCS: one box per unit, the cursor already in the biggest unit's box (the carton). Tab or the arrow keys move
+        // between the boxes, Enter adds to the bill (an empty box adds 1) and the cursor goes back to the search box.
+        function qtyDialog(p) {
+            const units = [{ unitId: p.baseUnitId || '', name: p.baseUnit || 'Unit', factor: 1 }, ...(p.altUnits || []).map(u => ({ unitId: u.unitId, name: u.name, factor: Number(u.factor) || 1 }))];
+            const size = u => 1 / (u.factor || 1); // in base units (1 base = factor of this unit)
+            const order = [...units].sort((a, b) => size(b) - size(a)); // CTN first, then loose PCS
+            const small = order[order.length - 1];
+            const per = u => Calc.q3(size(u) / size(small)); // how many of the smallest unit one of this unit holds
+            const left2 = p.type === 'SERVICE' ? null : Calc.q3(p.stock - inCart(p.id));
+            const m = ui.modal({
+                width: order.length > 2 ? 680 : 520, title: p.name, onClose: focusSearch,
+                subtitle: `${t('Type the quantity')} · Tab / ← → ${t('switch')} ${order.map(u => u.name).join(' / ')} · Enter ${t('adds to the bill')}${left2 === null ? '' : ` · ${fmt.qty(left2)} ${p.baseUnit || ''} ${t('in stock')}`}`,
+                body: html`<div class="grid gap-3 ${order.length > 2 ? 'sm:grid-cols-3' : 'grid-cols-2'}">${order.map((u, k) => html`<label class="block rounded-xl border border-line p-3 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/30">
+                    <span class="flex items-center justify-between gap-2"><span class="text-base font-bold uppercase">${u.name}</span><span class="text-xs text-muted">${fmt.money(unitPrice(p, u.unitId || null))} ${t('each')}</span></span>
+                    <input class="input mt-2 h-14 text-2xl font-bold tabular-nums" inputmode="decimal" autocomplete="off" placeholder="0" data-uq="${k}" ${k === 0 ? raw('autofocus') : ''}>
+                    <span class="mt-1 block h-4 text-xs text-muted" data-eq="${k}">${u === small ? '' : `1 ${u.name} = ${fmt.qty(per(u))} ${small.name}`}</span></label>`)}</div>`,
+                footer: html`<span class="me-auto text-sm font-semibold" data-sum></span><button class="btn btn-outline" data-close>${t('Cancel')}</button><button class="btn btn-primary" data-ok>${t('Add to bill')}<span class="kbd ms-1 !bg-white/20 !text-white !border-white/30">Enter</span></button>`,
+            });
+            const inputs = [...m.el.querySelectorAll('[data-uq]')];
+            const raw2 = i => String(inputs[i].value).trim().replace(',', '.');
+            const val = i => { const n = Number(raw2(i)); return raw2(i) && Number.isFinite(n) && n > 0 ? Calc.q3(n) : 0; };
+            const update = () => {
+                const parts = order.map((u, i) => [u, val(i)]).filter(([, v]) => v);
+                order.forEach((u, i) => { if (u !== small) m.el.querySelector(`[data-eq="${i}"]`).textContent = val(i) ? `= ${fmt.qty(Calc.q3(val(i) * per(u)))} ${small.name}` : `1 ${u.name} = ${fmt.qty(per(u))} ${small.name}`; });
+                const pcs = Calc.q3(parts.reduce((s, [u, v]) => s + v * per(u), 0));
+                const amount = parts.reduce((s, [u, v]) => s + Calc.round(v * unitPrice(p, u.unitId || null)), 0);
+                m.el.querySelector('[data-sum]').textContent = parts.length ? `${parts.map(([u, v]) => `${fmt.qty(v)} ${u.name}`).join(' + ')}${parts.length > 1 || parts[0][0] !== small ? ` = ${fmt.qty(pcs)} ${small.name}` : ''} · ${fmt.money(amount)}` : '';
+            };
+            const done = () => {
+                const bad = inputs.findIndex((x, i) => raw2(i) && !(Number(raw2(i)) > 0));
+                if (bad >= 0) { inputs[bad].focus(); inputs[bad].select(); return ui.toast(t('Type a quantity such as 2 or 1.5.'), 'error'); }
+                let parts = order.map((u, i) => [u, val(i)]).filter(([, v]) => v > 0);
+                if (!parts.length) { const i = Math.max(0, inputs.indexOf(document.activeElement)); parts = [[order[i], 1]]; }
+                m.close();
+                for (const [u, v] of parts) addLine(p, { unitId: u.unitId || null, qty: v });
+                focusSearch();
+            };
+            m.el.addEventListener('input', update);
+            m.el.addEventListener('keydown', e => {
+                const k = inputs.indexOf(e.target);
+                if (e.key === 'Enter') { e.preventDefault(); done(); return; }
+                if (k < 0) return;
+                const el2 = e.target, atStart = el2.selectionStart === 0 && el2.selectionEnd === 0, atEnd = el2.selectionStart === el2.value.length;
+                const step = e.key === 'ArrowDown' || (e.key === 'ArrowRight' && atEnd) ? 1 : e.key === 'ArrowUp' || (e.key === 'ArrowLeft' && atStart) ? -1 : 0;
+                if (step) { e.preventDefault(); const n = (k + step + inputs.length) % inputs.length; inputs[n].focus(); inputs[n].select(); }
+            });
+            m.el.querySelector('[data-ok]').addEventListener('click', done);
+            setTimeout(() => { inputs[0].focus(); inputs[0].select(); }, 40);
         }
         async function pickSerial(p) {
             let serials;
@@ -189,17 +275,17 @@ HP.page('/pos', {
             const free = serials.filter(s => !used.has(s.serial));
             if (!free.length) return ui.toast(`No serial of "${p.name}" left in stock.`, 'error');
             const m = ui.modal({ title: p.name, subtitle: 'Pick the serial / IMEI being sold', width: 420, body: html`<input class="input mb-3" placeholder="Search or scan serial" data-sf autofocus><div class="max-h-72 overflow-y-auto thin-scroll space-y-1" data-sl>${free.map(s => html`<button class="block w-full rounded-lg border border-line px-3 py-2 text-left font-mono text-sm hover:bg-surface-2" data-s="${s.serial}">${s.serial}</button>`)}</div>` });
-            m.el.addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (b) { m.close(); addLine(p, { serial: b.dataset.s }); } });
+            m.el.addEventListener('click', e => { const b = e.target.closest('[data-s]'); if (b) { m.close(); addLine(p, { serial: b.dataset.s }); focusSearch(); } });
             m.el.querySelector('[data-sf]').addEventListener('input', e => m.el.querySelectorAll('[data-s]').forEach(b => b.classList.toggle('hidden', !b.dataset.s.toLowerCase().includes(e.target.value.toLowerCase()))));
-            m.el.querySelector('[data-sf]').addEventListener('keydown', e => { if (e.key === 'Enter') { const hit = free.find(s => s.serial.toLowerCase() === e.target.value.trim().toLowerCase()); if (hit) { m.close(); addLine(p, { serial: hit.serial }); } } });
+            m.el.querySelector('[data-sf]').addEventListener('keydown', e => { if (e.key === 'Enter') { const hit = free.find(s => s.serial.toLowerCase() === e.target.value.trim().toLowerCase()); if (hit) { m.close(); addLine(p, { serial: hit.serial }); focusSearch(); } } });
         }
         // Weighed sale @ price / unit: type the amount → quantity is worked out (or type the quantity)
         function weighDialog(p, line) {
             const units = [{ unitId: p.baseUnitId || '', name: p.baseUnit || 'unit', factor: 1, label: `${p.baseUnit || 'Unit'} (base)` }, ...(p.altUnits || []).map(u => ({ unitId: u.unitId, name: u.name, factor: u.factor, label: `${u.name} (1 ${p.baseUnit || 'base'} = ${u.factor} ${u.name})` }))];
             let unitId = line ? line.unitId || '' : units[0].unitId;
-            const priceOf = uid => unitPrice(p, uid || null);
+            const priceOf = uid => unitPrice(p, uid || null, line ? lineMode(line) : cart.priceMode);
             const m = ui.modal({
-                width: 680, title: p.name, subtitle: `Weighed sale @ ${fmt.money(basePrice(p), { noSym: true })} / ${p.baseUnit || 'unit'}`,
+                width: 680, title: p.name, subtitle: `Weighed sale @ ${fmt.money(basePrice(p, line ? lineMode(line) : cart.priceMode), { noSym: true })} / ${p.baseUnit || 'unit'}`,
                 headerExtra: html`<div><div class="eyebrow mb-1">SELECT UNIT</div><select class="input h-9 w-56" data-u>${units.map(u => html`<option value="${u.unitId}" ${u.unitId === unitId ? raw('selected') : ''}>${u.label}</option>`)}</select></div>`,
                 body: html`<div class="grid grid-cols-2 gap-4"><div><div class="eyebrow mb-1">TOTAL AMOUNT (RS)</div><input class="input h-16 text-2xl" type="number" min="0" step="0.01" placeholder="0" data-amt autofocus></div>
                   <div><div class="eyebrow mb-1" data-ql>QUANTITY (${(units.find(u => u.unitId === unitId) || units[0]).name.toUpperCase()})</div><input class="input h-16 text-2xl" type="number" min="0" step="any" placeholder="0" data-qty value="${line ? line.qty : ''}"></div></div>`,
@@ -228,6 +314,7 @@ HP.page('/pos', {
                 if (line) { Object.assign(line, { unitId: unitId || null, qty: qv, price: Math.round(exactPrice * 10000) / 10000, factor: (units.find(u => u.unitId === unitId) || units[0]).factor, unitName: (units.find(u => u.unitId === unitId) || units[0]).name, weighed: true }); draw(); }
                 else addLine(p, { unitId: unitId || null, qty: qv, price: Math.round(exactPrice * 10000) / 10000 });
                 m.close();
+                focusSearch();
             };
             ok.addEventListener('click', done);
             m.el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); done(); } });
@@ -251,8 +338,8 @@ HP.page('/pos', {
             }
             const t2 = totals();
             const body = {
-                clientId: cart.clientId, mode: cart.mode, priceMode: priceMode(), customerId: cart.customer ? cart.customer.id : null, customerName: cart.customerName,
-                items: cart.lines.map(l => ({ productId: l.productId, unitId: l.unitId, qty: l.qty, price: l.custom || l.weighed ? Math.round(l.price * 10000) / 10000 : undefined, lineDiscount: l.lineDiscount || 0, serial: l.serial, note: l.note })),
+                clientId: cart.clientId, mode: cart.mode, priceMode: billMode() === 'WHOLESALE' ? 'WHOLESALE' : 'RETAIL', customerId: cart.customer ? cart.customer.id : null, customerName: cart.customerName,
+                items: cart.lines.map(l => ({ productId: l.productId, unitId: l.unitId, qty: l.qty, priceMode: lineMode(l), price: l.custom || l.weighed ? Math.round(l.price * 10000) / 10000 : undefined, lineDiscount: l.lineDiscount || 0, serial: l.serial, note: l.note })),
                 discountType: cart.discountType, discountValue: cart.discountType === 'PERCENT' ? Number(cart.discountValue) || 0 : fmt.toPaisa(cart.discountValue),
                 payments: t2.pays.filter(p => p.amount > 0),
             };
@@ -291,7 +378,7 @@ HP.page('/pos', {
                 if (r) {
                     if (cart.lines.length && !(await ui.confirm({ title: 'Replace the current cart?', message: 'The cart on screen will be cleared.', ok: 'Resume held sale' }))) return;
                     const h = list.find(z => z.id === r.dataset.resume);
-                    try { await api.del('/api/pos/held/' + h.id); cart = { ...fresh(), ...h.cart, clientId: uuid() }; d.close(); draw(); if (cart.customer) loadLastPrices(cart.customer.id); } catch (err) { ui.fail(err); }
+                    try { await api.del('/api/pos/held/' + h.id); cart = normalize({ ...fresh(), ...h.cart, clientId: uuid() }); d.close(); draw(); if (cart.customer) loadLastPrices(cart.customer.id); } catch (err) { ui.fail(err); }
                 }
                 if (x) {
                     if (!(await ui.confirm({ title: 'Delete this held sale?', message: 'Its items are thrown away. This cannot be undone.', ok: 'Delete', danger: true }))) return;
@@ -308,13 +395,13 @@ HP.page('/pos', {
         function newCustomer() {
             ui.formDrawer({ title: 'Add Credit Customer', subtitle: 'Quick add — full details under Parties → Customers', submit: 'Add customer',
                 body: ui.grid(ui.field({ label: 'Name', name: 'name', required: true }), ui.field({ label: 'Phone', name: 'phone', half: true }), ui.field({ label: 'Credit Limit', name: 'creditLimit', money: true, half: true, help: 'Set to 0 for unlimited credit' }), ui.field({ label: 'Customer Group', name: 'group', type: 'select', options: [['RETAIL', 'Retail'], ['WHOLESALE', 'Wholesale'], ['VIP', 'VIP']] })),
-                async onSubmit(v, d) { const c = await api.post('/api/pos/customers', v); cart.customer = c; cart.mode = 'CREDIT'; d.close(); repriceAll(); drawRight(); ui.toast('Customer added'); } });
+                async onSubmit(v, d) { const c = await api.post('/api/pos/customers', v); cart.customer = c; cart.mode = 'CREDIT'; d.close(); customerPrices(); draw(); ui.toast('Customer added'); } });
         }
         function posSettings() {
             const d = ui.drawer({ title: 'POS settings', subtitle: 'Saved on this device',
                 body: html`<div class="grid grid-cols-12 gap-3">${ui.field({ name: 'wholesale', label: 'Wholesale Mode', help: 'Sell at wholesale prices (where a product has one). Wholesale customers always get them.', type: 'switch', value: P.wholesale })}${ui.field({ name: 'retail', label: 'Start in Retail / Barcode view', type: 'switch', value: P.view === 'RETAIL' })}</div>
                   <div class="mt-6 rounded-xl bg-surface-2 p-4 text-sm"><div class="font-semibold mb-1">Active taxes</div>${boot.taxes.length ? boot.taxes.map(x => html`<div class="flex justify-between"><span>${x.name}${x.combine ? ' (compound)' : ''}</span><span>${x.rate}%</span></div>`) : html`<span class="text-muted">No taxes configured.</span>`}<div class="mt-2 text-xs text-muted">Receipt layout, auto-print and copies: Administration → Settings → Receipt & POS.</div></div>` });
-            d.el.addEventListener('change', () => { const v = ui.readForm(d.el); P.wholesale = v.wholesale; P.view = v.retail ? 'RETAIL' : 'VISUAL'; savePrefs(P); repriceAll(); draw(); });
+            d.el.addEventListener('change', () => { const v = ui.readForm(d.el); const was = P.wholesale; P.wholesale = v.wholesale; P.view = v.retail ? 'RETAIL' : 'VISUAL'; savePrefs(P); if (was !== P.wholesale) setAll(P.wholesale ? 'WHOLESALE' : 'RETAIL'); draw(); });
         }
         function taxesPopover(anchor) {
             ui.menu(anchor, boot.taxes.length ? boot.taxes.map(x => ({ label: `${x.name} — ${x.rate}%${x.combine ? ' (compound)' : ''}`, iconName: 'percent', onClick() { } })) : [{ label: 'No taxes configured. Add them in Finance → Taxes & Duties.', iconName: 'info', onClick() { } }]);
@@ -323,7 +410,7 @@ HP.page('/pos', {
         // barcode / search: Enter adds an exact code match, else the single result
         let pendingQty = null;
         const QTY = /^\s*(\d+(?:\.\d+)?)\s*[*xX×]\s*(.*)$/;
-        function scan(code) {
+        function scan(code, fromBox) {
             const mq = String(code || '').match(QTY);
             if (mq) {
                 pendingQty = Number(mq[1]);
@@ -336,6 +423,12 @@ HP.page('/pos', {
             if (hit) { pick(hit); return true; }
             const list = filtered();
             if (list.length === 1) { pick(list[0]); return true; }
+            // several products match what was typed: the first is picked out; ↓ ↑ choose another, Enter adds it
+            if (fromBox && list.length > 1) {
+                hi = 0; refreshProducts();
+                ui.toast(`${list.length} ${t('products match: choose with ↓ ↑ and press Enter')}`, 'info');
+                return false;
+            }
             // nothing added: a "24*" typed with an unknown code must not carry over to the next product tapped
             pendingQty = null;
             if (Perms.has(HP.session, 'inventory.add') && HP.inventory && /^[A-Za-z0-9\-]{4,}$/.test(String(code).trim())) {
@@ -355,15 +448,16 @@ HP.page('/pos', {
             if (d.cat) { cat = d.cat; drawLeft(); return; }
             if (b.closest('[data-camscan]')) { HP.native.scan().then(code => { if (code && scan(code)) refreshProducts(); }).catch(err => ui.fail(err)); return; }
             if (b.closest('[data-seg=view]') && d.v) { P.view = d.v; savePrefs(P); drawLeft(); return; }
-            if (b.closest('[data-seg=price]') && d.v) { P.wholesale = d.v === 'WHOLESALE'; savePrefs(P); repriceAll(); draw(); return; }
+            if (b.closest('[data-seg=price]') && d.v) { P.wholesale = d.v === 'WHOLESALE'; savePrefs(P); setAll(d.v); draw(); ui.toast(d.v === 'WHOLESALE' ? t('Wholesale prices for every item of this bill') : t('Retail prices for every item of this bill'), 'info'); return; }
             if (d.recvcust !== undefined && cart.customer) return HP.khata.receiveDialog(cart.customer, r => { cart.customer.balance = r.balance; drawRight(); });
             if (d.promcust !== undefined && cart.customer) return HP.khata.promiseDialog(cart.customer, () => ui.toast('Promise saved'));
-            if (b.closest('[data-seg=mode]') && d.v) { cart.mode = d.v; if (d.v === 'WALKIN') { cart.customer = null; repriceAll(); refreshProducts(); } drawRight(); if (d.v === 'CREDIT') right.querySelector('[data-cust]')?.focus(); return; }
+            if (b.closest('[data-seg=mode]') && d.v) { cart.mode = d.v; if (d.v === 'WALKIN') { cart.customer = null; customerPrices(); refreshProducts(); } drawRight(); if (d.v === 'CREDIT') right.querySelector('[data-cust]')?.focus(); return; }
             if (b.closest('[data-seg=dtype]') && d.v) { cart.discountType = d.v; drawRight(); return; }
             if (d.held !== undefined) return heldDrawer();
             if (d.inc !== undefined) { const l = cart.lines[+d.inc]; if (l.serial) return; l.qty = Calc.q3(l.qty + 1); draw(); return; }
             if (d.dec !== undefined) { const l = cart.lines[+d.dec]; if (l.qty > 1) l.qty = Calc.q3(l.qty - 1); else cart.lines.splice(+d.dec, 1); draw(); return; }
             if (d.rm !== undefined) { cart.lines.splice(+d.rm, 1); draw(); return; }
+            if (d.ws !== undefined) return toggleLineWholesale(+d.ws);
             if (d.w !== undefined) { const l = cart.lines[+d.w]; if (!l.serial && byId[l.productId]) weighDialog(byId[l.productId], l); return; }
             if (d.note !== undefined) return lineNote(+d.note);
             if (d.lastrate !== undefined) { const l = cart.lines[+d.lastrate]; const lp = lastPrices[`${l.productId}:${l.unitId || ''}`]; if (lp) { l.price = lp.price; l.custom = true; drawRight(); } return; }
@@ -388,15 +482,38 @@ HP.page('/pos', {
         });
         el.addEventListener('input', e => {
             const d = e.target.dataset;
-            if (d.search !== undefined) { q = e.target.value.replace(/^\s*\d+(\.\d+)?\s*[*xX×]\s*/, ''); refreshProducts(); return; }
+            if (d.search !== undefined) { q = e.target.value.replace(/^\s*\d+(\.\d+)?\s*[*xX×]\s*/, ''); hi = -1; refreshProducts(); return; }
             if (d.cname !== undefined) { cart.customerName = e.target.value; return; }
             if (d.disc !== undefined) { cart.discountValue = e.target.value; updateTotalsOnly(); return; }
             if (d.pamt !== undefined) { cart.payments[+d.pamt].amount = e.target.value; updateTotalsOnly(); return; }
             if (d.splitamt !== undefined) { cart.splitAmounts[d.splitamt] = e.target.value; updateTotalsOnly(); }
         });
         el.addEventListener('change', e => { if (e.target.dataset.pmethod !== undefined) { cart.payments[+e.target.dataset.pmethod].method = e.target.value; drawRight(); } });
+        // search box: ↓ ↑ walk through the results, Enter adds the one picked (or the scanned / typed code), Esc clears
         el.addEventListener('keydown', e => {
-            if (e.target.matches('[data-search]') && e.key === 'Enter') { e.preventDefault(); if (scan(e.target.value)) { q = ''; e.target.value = ''; refreshProducts(); } }
+            if (!e.target.matches('[data-search]')) return;
+            const box = e.target;
+            const clear = () => { q = ''; hi = -1; box.value = ''; refreshProducts(); };
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                const list = filtered();
+                if (!list.length) return;
+                e.preventDefault();
+                hi = hi < 0 ? 0 : Math.max(0, Math.min(list.length - 1, hi + (e.key === 'ArrowDown' ? 1 : -1)));
+                refreshProducts();
+                left.querySelector('[data-hi]')?.scrollIntoView({ block: 'nearest' });
+                return;
+            }
+            if (e.key === 'Escape' && (q || hi >= 0)) { e.preventDefault(); clear(); return; }
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            const list = filtered();
+            if (hi >= 0 && list[hi]) {
+                const mq = box.value.match(QTY);
+                pendingQty = mq ? Number(mq[1]) : null;
+                const p = list[hi];
+                clear(); pick(p); return;
+            }
+            if (scan(box.value, true)) clear();
         });
         // re-render the right panel while typing amounts without losing the cursor
         function updateTotalsOnly() {

@@ -12,6 +12,9 @@ const TYPE = {
 const typeLabel = (k, lang) => (TYPE[k] || [k, k])[lang === 'ur' ? 1 : 0];
 let MSG = null; // messaging settings (templates) cache
 const messaging = async (fresh) => { if (!MSG || fresh) MSG = await api.get('/api/khata/messaging'); return MSG; };
+const app = HP.native && HP.native.isApp && HP.native.isApp();
+// "Also copy the bill slip picture" — remembered on this computer, on unless switched off
+const slipPref = v => { try { if (v === undefined) return localStorage.getItem('hp.waSlip') !== '0'; localStorage.setItem('hp.waSlip', v ? '1' : '0'); } catch { return true; } };
 
 function promiseBadge(p) {
     if (!p) return '';
@@ -35,28 +38,59 @@ function promiseExtra(p, today) {
 }
 
 // send dialog: pick language + channel, edit the text, then WhatsApp (opens chat) or SMS (gateway)
-async function sendReminder(party, { kind = 'BALANCE_REMINDER', promise = null, extra = {}, refId = null, onDone } = {}) {
+// slip: () => Promise<Blob> of the bill's picture (Send bill): a computer copies it when WhatsApp opens (Ctrl+V pastes the
+// whole thermal slip into the chat); the phone app shares it through Android's share sheet.
+async function sendReminder(party, { kind = 'BALANCE_REMINDER', promise = null, extra = {}, refId = null, onDone, slip = null } = {}) {
     let m;
     try { m = await messaging(); } catch (err) { return ui.fail(err); }
     let lang = m.language || 'ur';
     const key = { PROMISE_REMINDER: 'promise', BALANCE_REMINDER: 'balance', PAYMENT_THANKS: 'thanks', RECEIPT: 'bill', STATEMENT: 'balance' }[kind] || 'balance';
-    const build = () => HP.wa.fill(m[key + (lang === 'ur' ? 'Ur' : 'En')], values(party, { ...(promise ? promiseExtra(promise) : {}), ...extra }));
+    // a bill template saved before {items} existed still gets the item lines, right after the bill number
+    const template = () => {
+        const tpl = m[key + (lang === 'ur' ? 'Ur' : 'En')];
+        if (key !== 'bill' || /\{items\}/.test(tpl)) return tpl;
+        const lines = String(tpl || '').split('\n');
+        const at = lines.findIndex(l => l.includes('{number}'));
+        lines.splice(at < 0 ? lines.length : at + 1, 0, '', '{items}', '');
+        return lines.join('\n');
+    };
+    // extra may depend on the language chosen in the dialog (the item lines of a bill)
+    const build = () => HP.wa.fill(template(), values(party, { ...(promise ? promiseExtra(promise) : {}), ...(typeof extra === 'function' ? extra(lang) : extra) }));
     const d = ui.modal({
         title: kind === 'PROMISE_REMINDER' ? 'Promise reminder' : kind === 'RECEIPT' ? 'Send bill' : kind === 'PAYMENT_THANKS' ? 'Payment received' : 'Balance reminder',
         subtitle: `${party.name}${party.phone ? ' · ' + party.phone : ' · no phone saved'}`, width: 560,
         body: html`<div class="mb-3 flex items-center justify-between gap-3">${ui.seg('lang', [['ur', 'اردو'], ['en', 'English']], lang)}
-            <label class="flex items-center gap-2 text-xs text-muted">Open WhatsApp in <select class="input h-8 w-36" data-target><option value="app" ${HP.wa.target() === 'app' ? raw('selected') : ''}>WhatsApp app</option><option value="web" ${HP.wa.target() === 'web' ? raw('selected') : ''}>WhatsApp Web</option></select></label></div>
+            <label class="flex items-center gap-2 text-xs text-muted ${HP.native && HP.native.isApp() ? 'hidden' : ''}">Open WhatsApp in <select class="input h-8 w-36" data-target><option value="app" ${HP.wa.target() === 'app' ? raw('selected') : ''}>WhatsApp app</option><option value="web" ${HP.wa.target() === 'web' ? raw('selected') : ''}>WhatsApp Web</option></select></label></div>
           <div class="mb-3"><label class="label">Mobile (WhatsApp / SMS)</label><input class="input" data-phone value="${party.phone || ''}" placeholder="0300-1234567"></div>
           <textarea class="input font-sans" rows="10" data-text dir="auto">${build()}</textarea>
+          ${slip && !app ? html`<label class="mt-2 flex cursor-pointer items-center gap-2 text-sm"><input type="checkbox" class="check" data-slip ${slipPref() ? raw('checked') : ''}><span>${t('Also copy the bill slip picture — paste it in the chat with Ctrl+V')}</span></label>` : ''}
           <p class="help">${m.smsEnabled ? 'SMS goes through the shop\'s SMS gateway' + (m.provider === 'LOG' ? ' (test mode: only logged).' : '.') : 'SMS is off — turn it on in Promises & Reminders → Messaging settings.'} WhatsApp opens the chat; press send there.</p>`,
-        footer: html`<button class="btn btn-outline" data-close>${t('Cancel')}</button><button class="btn btn-outline" data-sms ${m.smsEnabled ? '' : raw('disabled')}>${icon('receipt')}Send SMS</button><button class="btn btn-primary" data-wa>${icon('arrowRight')}WhatsApp</button>`,
+        footer: html`${slip && app ? html`<button class="btn btn-outline me-auto" data-shareslip>${icon('image')}${t('Share slip picture')}</button>` : ''}<button class="btn btn-outline" data-close>${t('Cancel')}</button><button class="btn btn-outline" data-sms ${m.smsEnabled ? '' : raw('disabled')}>${icon('receipt')}Send SMS</button><button class="btn btn-primary" data-wa>${icon('arrowRight')}WhatsApp</button>`,
     });
+    // the picture is made while the dialog is open, so the WhatsApp click is quick
+    const picture = slip ? slip().catch(() => null) : null;
     const ta = d.el.querySelector('[data-text]');
     d.el.addEventListener('click', async e => {
         const s = e.target.closest('[data-seg=lang] [data-v]');
         if (s) { lang = s.dataset.v; d.el.querySelectorAll('[data-seg=lang] button').forEach(b => b.classList.toggle('on', b.dataset.v === lang)); ta.value = build(); return; }
+        if (e.target.closest('[data-shareslip]')) {
+            const blob = await picture;
+            if (!blob) return ui.toast(t('The bill picture could not be made.'), 'error');
+            try { await HP.native.shareBlob(blob, `${party.name || 'bill'}.png`.replace(/[^\w.-]+/g, '-')); } catch (err) { ui.fail(err); }
+            return;
+        }
         if (e.target.closest('[data-wa]')) {
             const text = ta.value.trim(), phone = d.el.querySelector('[data-phone]').value.trim();
+            if (!HP.wa.number(phone)) { HP.wa.open(phone, text); return; } // says what is wrong with the number
+            const box = d.el.querySelector('[data-slip]');
+            if (box) {
+                slipPref(box.checked);
+                if (box.checked) {
+                    const blob = await picture;
+                    try { if (!blob) throw new Error(); await HP.native.copyImage(blob); ui.toast(t('Bill slip picture copied: in the WhatsApp chat press Ctrl+V, then send.')); }
+                    catch { ui.toast(t('The slip picture could not be copied. Use Picture on the bill to save it.'), 'error'); }
+                }
+            }
             if (!HP.wa.open(phone, text)) return;
             api.post('/api/khata/messages/log', { partyId: party.id || null, kind, to: phone, body: text, refId: refId || (promise && promise.id) }).then(() => onDone && onDone()).catch(() => {});
             d.close();
@@ -83,11 +117,14 @@ async function receiveDialog(party, onDone) {
             ui.field({ label: 'Method', name: 'method', type: 'select', half: true, options: [['CASH', 'Cash'], ['BANK', 'Bank transfer'], ['CARD', 'Card'], ['WALLET', 'JazzCash / Easypaisa']] }),
             accounts.length ? ui.field({ label: 'Into account', name: 'accountId', type: 'select', half: true, options: [['', 'Automatic (by method)'], ...accounts.map(a => [a.id, `${a.name}${a.balance !== undefined ? ' — ' + fmt.money(a.balance) : ''}`])] }) : '',
             ui.field({ label: 'Note', name: 'note', placeholder: 'e.g. part payment' }),
-            ui.field({ label: 'Send a thank-you on WhatsApp after saving', name: 'thanks', type: 'checkbox', value: !!HP.wa.number(party.phone) }))}`,
+            ui.field({ label: 'Send a thank-you on WhatsApp after saving', name: 'thanks', type: 'checkbox', value: !!HP.wa.number(party.phone) }),
+            ui.field({ label: 'Print the receipt after saving (with the remaining balance)', name: 'printIt', type: 'checkbox', value: HP.receipt.autoPayPrint() }))}`,
         async onSubmit(v, d) {
+            HP.receipt.autoPayPrint(v.printIt);
             const r = await api.post('/api/khata/receive', { partyId: party.id, amount: v.amount, method: v.method, accountId: v.accountId || null, note: v.note });
             d.close();
             ui.toast(`${r.number}: ${fmt.money(r.amount)} received · balance ${fmt.money(r.balance)}`);
+            if (v.printIt) HP.receipt.printPayment({ direction: 'IN', number: r.number, date: r.date, partyName: party.name, partyType: 'CUSTOMER', partyPhone: party.phone, method: v.method, amount: r.amount, balanceBefore: r.balance + r.amount, balance: r.balance, note: v.note });
             if (v.thanks) sendReminder({ ...party, balance: r.balance }, { kind: 'PAYMENT_THANKS', extra: { amount: HP.wa.ltr(HP.wa.rs(r.amount)) }, refId: r.id });
             onDone && onDone(r);
         },
@@ -347,7 +384,7 @@ async function messagingSettings() {
     let m;
     try { m = await messaging(true); } catch (err) { return ui.fail(err); }
     const TPL = [['promise', 'Promise reminder'], ['balance', 'Balance reminder'], ['thanks', 'Payment received (thank you)'], ['bill', 'Bill / receipt']];
-    const ph = '{name} customer · {shop} your shop · {amount} amount · {balance} khata balance · {date} promised date · {when} آج / date · {whenEn} today / by date · {phone} shop phone · {number} {total} {paid} {due} bill figures';
+    const ph = '{name} customer · {shop} your shop · {amount} amount · {balance} khata balance · {date} promised date · {when} آج / date · {whenEn} today / by date · {phone} shop phone · {number} {total} {paid} {due} bill figures · {items} the bill\'s item lines';
     ui.formDrawer({
         title: 'Messaging settings', subtitle: 'Reminder wording (Urdu & English) and the SMS gateway', wide: true, submit: 'Save settings',
         body: html`${ui.section('LANGUAGE', ui.field({ label: 'Default message language', name: 'language', type: 'select', value: m.language, options: [['ur', 'اردو (Urdu)'], ['en', 'English']], help: 'Each send dialog can switch for one message.' }))}

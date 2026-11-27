@@ -1,8 +1,10 @@
-// The only bridge between the web page and the desktop app: silent printing, app information and app updates.
+// The only bridge between the web page and the desktop app: silent printing, copying a bill picture (to paste in
+// WhatsApp), app information and app updates.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('hpDesktop', {
     printSilent: () => ipcRenderer.invoke('print-silent'),
+    copyImage: dataUrl => ipcRenderer.invoke('copy-image', dataUrl),
     info: () => ipcRenderer.invoke('app-info'),
     updates: {
         state: () => ipcRenderer.invoke('update-state'),

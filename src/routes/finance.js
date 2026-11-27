@@ -216,7 +216,10 @@ router.post('/payments', MANAGE, async (req, res) => {
         party = await prisma.party.findFirst({ where: { id: String(b.partyId), tenantId: t, deletedAt: null } });
         if (!party) throw new HttpError(400, 'That customer / vendor was not found.');
     }
+    let balanceBefore = null, balance = null;
     const pay = await withTx(t, async tx => {
+        // the party's balance before and after (printed on the receipt): customer = they owe us, vendor = we owe them
+        if (party) balanceBefore = await ledger.balance(t, party.id, party.type === 'VENDOR', tx);
         const accountId = await treasury.accountFor(tx, t, method, str(b.accountId, 60) || null);
         const number = await numbering.number(tx, t, direction === 'IN' ? 'paymentIn' : 'paymentOut', direction === 'IN' ? 'REC-' : 'PAY-');
         const p = await tx.payment.create({ data: {
@@ -225,10 +228,28 @@ router.post('/payments', MANAGE, async (req, res) => {
         // money in from a party lowers what they owe us (credit); money out to a party lowers what we owe them (debit)
         if (party) await ledger.post(tx, { tenantId: t, partyId: party.id, type: direction === 'IN' ? 'PAYMENT_IN' : 'PAYMENT_OUT', ...(direction === 'IN' ? { credit: amount } : { debit: amount }), refId: p.id, refNo: number, note: note || reference || (direction === 'IN' ? 'Payment received' : 'Payment made'), date: at });
         await treasury.post(tx, { tenantId: t, accountId, type: direction === 'IN' ? 'PAYMENT_IN' : 'PAYMENT_OUT', amount: direction === 'IN' ? amount : -amount, partyId: party ? party.id : null, refId: p.id, refNo: number, note: [party ? party.name : direction === 'IN' ? 'Other income' : 'Other payout', reference, note].filter(Boolean).join(' — '), date: at });
+        if (party) balance = await ledger.balance(t, party.id, party.type === 'VENDOR', tx);
         return p;
     });
     await audit(req, { action: direction === 'IN' ? 'finance.payment_in' : 'finance.payment_out', summary: `${direction === 'IN' ? 'Payment in' : 'Payment out'} ${pay.number}: ${rs(amount)} ${direction === 'IN' ? 'from' : 'to'} ${party ? `"${party.name}"` : '(no party)'} by ${method.toLowerCase()}` });
-    res.json({ id: pay.id, number: pay.number, amount, direction, partyName: pay.partyName, accountId: pay.accountId, date: pay.date });
+    const acc = await prisma.account.findFirst({ where: { id: pay.accountId, tenantId: t }, select: { name: true } });
+    res.json({ id: pay.id, number: pay.number, amount, direction, method, partyId: pay.partyId, partyName: pay.partyName, partyType: party ? party.type : '', partyPhone: party ? party.phone : '', accountId: pay.accountId, accountName: acc ? acc.name : '', reference, note, date: pay.date, balanceBefore, balance });
+});
+
+// one payment with the party's balance just before and just after it (for printing the receipt again later)
+router.get('/payments/:id', MANAGE, async (req, res) => {
+    const t = req.user.tenantId;
+    const p = await prisma.payment.findFirst({ where: { id: req.params.id, tenantId: t, deletedAt: null } });
+    if (!p) throw new HttpError(404, 'Payment not found.');
+    const party = p.partyId ? await prisma.party.findFirst({ where: { id: p.partyId, tenantId: t } }) : null;
+    let balanceBefore = null, balance = null;
+    if (party) {
+        const rows = await ledger.statement(t, party);
+        const at = rows.findIndex(r => r.refId === p.id && (r.type === 'PAYMENT_IN' || r.type === 'PAYMENT_OUT'));
+        if (at >= 0) { balance = rows[at].balance; balanceBefore = at ? rows[at - 1].balance : 0; }
+    }
+    const acc = await prisma.account.findFirst({ where: { id: p.accountId, tenantId: t }, select: { name: true } });
+    res.json({ id: p.id, number: p.number, date: p.date, direction: p.direction, partyId: p.partyId, partyName: p.partyName, partyType: party ? party.type : '', partyPhone: party ? party.phone : '', amount: N(p.amount), method: p.method, accountId: p.accountId, accountName: acc ? acc.name : '', reference: p.reference, note: p.note, balanceBefore, balance });
 });
 
 // delete a payment: the payment, its khata entry and its account entry are all marked deleted together

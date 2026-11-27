@@ -53,14 +53,46 @@ function healthText(h) {
     }
 }
 
-function view(d, range) {
-    const s = HP.session;
-    const p = d.period, dl = d.deltas;
-    const shop = (s.tenant && s.tenant.name) || '';
+// Hide Dashboard Details: remembered on this computer until the admin (owner) password is entered to show them again
+const hideKey = () => 'hp.dash.hidden.' + ((HP.session.tenant && HP.session.tenant.id) || '');
+const isHidden = () => { try { return localStorage.getItem(hideKey()) === '1'; } catch { return false; } };
+const setHidden = v => { try { v ? localStorage.setItem(hideKey(), '1') : localStorage.removeItem(hideKey()); } catch { } };
+const shopName = () => (HP.session.tenant && HP.session.tenant.name) || '';
+const actionCenter = () => html`<div class="card mt-6 p-4">
+        <div class="flex items-center justify-between px-1"><div class="eyebrow text-[12px]">ACTION CENTER</div><div class="text-xs text-muted">Core ledger actions</div></div>
+        <div class="mt-3 flex flex-wrap gap-3">${ACTIONS.map(([l, href, ic, tone]) => html`<a href="${href}" data-link class="inline-flex items-center gap-3 rounded-full border border-line bg-surface py-1.5 ps-1.5 pe-5 text-sm font-medium hover:bg-surface-2">
+          <span class="flex h-8 w-8 items-center justify-center rounded-full ${tone}">${icon(ic, 'w-4 h-4')}</span>${t(l)}</a>`)}</div>
+      </div>`;
+
+// the dashboard while its details are hidden: no figure is loaded at all, only the actions
+function hiddenView() {
+    const dots = '••••••';
     return html`
       <div class="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-line pb-6">
-        <div><div class="eyebrow tracking-[0.12em]">${fmt.longDate(new Date())}</div><h1 class="mt-2 text-3xl font-bold tracking-tight">${t(greeting())}, ${shop}</h1></div>
-        ${ui.rangeButton(range)}
+        <div><div class="eyebrow tracking-[0.12em]">${fmt.longDate(new Date())}</div><h1 class="mt-2 text-3xl font-bold tracking-tight">${t(greeting())}, ${shopName()}</h1></div>
+        <button class="btn btn-primary" data-show>${icon('eye')}${t('Show Details')}</button>
+      </div>
+      <div class="card flex flex-wrap items-center gap-4 p-6"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-muted">${icon('lock', 'w-6 h-6')}</div>
+        <div class="min-w-0 flex-1"><div class="font-semibold">${t('Dashboard details are hidden')}</div><div class="text-sm text-muted">${t('Sales, profit, expenses and balances are private. Enter the admin password to show them.')}</div></div></div>
+      <div class="mt-6 grid gap-6 sm:grid-cols-2 xl:grid-cols-4">${['Sales & Revenue', 'Net Profit', 'Purchases', 'Expenses', 'Receivable', 'Payable', 'Gross Profit', 'Cash & Bank'].map(l => kpi({ label: l, value: dots, valueCls: 'text-faint tracking-widest', iconName: 'lock', tone: 'gray' }))}</div>
+      ${actionCenter()}`;
+}
+
+// Show Details asks for the admin (owner) password
+function unlockDialog(onDone) {
+    ui.formDrawer({
+        title: 'Show dashboard details', subtitle: 'Only the admin (shop owner) can show the figures', submit: html`${icon('eye')}${t('Show Details')}`,
+        body: ui.grid(ui.field({ label: 'Admin password', name: 'password', type: 'password', required: true, attr: { autofocus: true, autocomplete: 'current-password' }, help: 'The shop owner\'s HisabPro sign-in password.' })),
+        async onSubmit(v, d) { await api.post('/api/auth/unlock', { password: v.password }); d.close(); setHidden(false); onDone(); },
+    });
+}
+
+function view(d, range) {
+    const p = d.period, dl = d.deltas;
+    return html`
+      <div class="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-line pb-6">
+        <div><div class="eyebrow tracking-[0.12em]">${fmt.longDate(new Date())}</div><h1 class="mt-2 text-3xl font-bold tracking-tight">${t(greeting())}, ${shopName()}</h1></div>
+        <div class="flex flex-wrap items-center gap-2"><button class="btn btn-outline" data-hide title="${t('Hide sales, profit and balances on this computer')}">${icon('eyeOff')}${t('Hide Details')}</button>${ui.rangeButton(range)}</div>
       </div>
       <div class="grid gap-6 md:grid-cols-2">
         ${kpi({ hero: true, heroCls: 'border-indigo-100 bg-linear-to-br from-indigo-50 to-surface dark:border-indigo-900 dark:from-indigo-950/50', label: 'Sales & Revenue', value: fmt.money(p.netSales), valueCls: 'text-accent', iconName: 'trending', tone: 'accent', sub: `${p.salesCount} sales · ${fmt.money(p.volume)} volume${p.returnsTotal ? ` · ${fmt.money(p.returnsTotal)} returned` : ''}`, delta: dl.netSales })}
@@ -78,11 +110,7 @@ function view(d, range) {
         ${kpi({ label: 'Cash & Bank', value: fmt.money(d.live.cashBank), valueCls: signTone(d.live.cashBank), iconName: 'wallet', tone: 'good', isLive: true })}
       </div>
 
-      <div class="card mt-6 p-4">
-        <div class="flex items-center justify-between px-1"><div class="eyebrow text-[12px]">ACTION CENTER</div><div class="text-xs text-muted">Core ledger actions</div></div>
-        <div class="mt-3 flex flex-wrap gap-3">${ACTIONS.map(([l, href, ic, tone]) => html`<a href="${href}" data-link class="inline-flex items-center gap-3 rounded-full border border-line bg-surface py-1.5 ps-1.5 pe-5 text-sm font-medium hover:bg-surface-2">
-          <span class="flex h-8 w-8 items-center justify-center rounded-full ${tone}">${icon(ic, 'w-4 h-4')}</span>${t(l)}</a>`)}</div>
-      </div>
+      ${actionCenter()}
 
       <div class="mt-6 grid gap-6 lg:grid-cols-3">
         <div class="card p-6 lg:col-span-2"><div class="font-semibold">Revenue & Profit Trend</div><div class="mt-0.5 text-xs text-muted">Daily revenue and net profit for the selected period</div>
@@ -155,6 +183,8 @@ HP.page('/dashboard', {
         }
 
         async function load() {
+            kill();
+            if (isHidden()) { data = null; ui.mount(el, hiddenView()); return; }
             data = await api.get('/api/reports/dashboard', { preset: range.preset, from: range.from, to: range.to });
             kill();
             ui.mount(el, view(data, range));
@@ -168,6 +198,8 @@ HP.page('/dashboard', {
                 try { await load(); } catch (err) { ui.fail(err); }
             });
         });
+        ui.on(el, 'click', '[data-hide]', () => { setHidden(true); load().catch(ui.fail); ui.toast(t('Dashboard details hidden')); });
+        ui.on(el, 'click', '[data-show]', () => unlockDialog(() => load().catch(ui.fail)));
         await load();
         return kill;
     },

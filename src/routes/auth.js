@@ -85,6 +85,32 @@ router.post('/password', authenticate, async (req, res) => {
     res.json({ token: signToken(upd) });
 });
 
+// Dashboard → Show details: the password of one of the shop's owners (the admin), so a cashier or manager at the same
+// computer cannot see the figures. 5 wrong tries wait 15 minutes. Wrong is a 400: a 401 would sign the user out.
+const unlockFails = new Map(); // userId → { n, until }
+router.post('/unlock', authenticate, async (req, res) => {
+    const password = String(req.body?.password || '');
+    if (!password) throw new HttpError(400, 'Enter the admin password.');
+    const key = req.user.id;
+    const f = unlockFails.get(key) || { n: 0, until: 0 };
+    if (f.until > Date.now()) throw new HttpError(400, `Too many wrong passwords. Try again after ${Math.ceil((f.until - Date.now()) / 60000)} minutes.`);
+    const owners = req.user.tenantId ? await prisma.user.findMany({ where: { tenantId: req.user.tenantId, role: 'OWNER', active: true, deletedAt: null } }) : [];
+    // the HisabPro administrator working in a client's workspace uses their own password
+    if (req.user.impersonatedBy) owners.push(await prisma.user.findUnique({ where: { id: req.user.impersonatedBy } }));
+    for (const u of owners.filter(Boolean)) {
+        if (await bcrypt.compare(password, u.passwordHash)) {
+            unlockFails.delete(key);
+            await audit(req, { action: 'auth.dashboard_unlock', summary: 'Dashboard details shown with the admin password' });
+            return res.json({ ok: true });
+        }
+    }
+    const n = f.n + 1;
+    unlockFails.set(key, n >= MAX_FAILS ? { n: 0, until: Date.now() + LOCK_MIN * 60000 } : { n, until: 0 });
+    if (unlockFails.size > 5000) unlockFails.clear();
+    await audit(req, { action: 'auth.dashboard_unlock_failed', summary: `Wrong admin password on the dashboard${n >= MAX_FAILS ? ` — blocked for ${LOCK_MIN} minutes` : ''}` });
+    throw new HttpError(400, 'Wrong admin password.');
+});
+
 router.post('/logout', authenticate, async (req, res) => {
     await audit(req, { action: 'auth.logout', summary: 'Signed out' });
     res.json({ ok: true });
