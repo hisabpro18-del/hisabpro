@@ -138,6 +138,9 @@ body { @apply bg-canvas text-ink font-sans antialiased; font-size: 14px; }
   @page { margin: 6mm; }
 }
 .receipt { font-family: var(--font-mono); color: #000; background: #fff; font-size: 12px; line-height: 1.35; }
+/* thermal slips print bold and a little bigger: thin 12px text comes out faint and broken on 203-dpi thermal heads
+   (Receipt & POS → Thermal print text can set it back to normal) */
+.receipt.w58, .receipt.w80 { font-size: 13px; font-weight: 700; }
 .receipt.w58 { width: 54mm; }
 .receipt.w80 { width: 72mm; }
 .receipt.a4 { width: 100%; max-width: 190mm; font-family: var(--font-sans); font-size: 12px; }

@@ -158,6 +158,21 @@ test('shop requests: wholesale per line, stock & price, payments, search, dashbo
         assert.deepEqual([again.balanceBefore, again.balance], [0, -1000]);
     });
 
+    await t.test('sales return: returns staff find any sale by name, mobile or invoice; thermal print settings', async () => {
+        const returns = await h.user('MANAGER', ['sales.delete']);
+        const byName = await h.get('/api/pos/sales?q=Bilal&limit=30', returns);
+        assert.equal(byName.status, 200);
+        assert.ok(byName.data.sales.length >= 1 && byName.data.sales.every(x => x.customerName === 'Bilal Store')); // the owner's sales too
+        assert.ok((await h.get('/api/pos/sales?q=7654321', returns)).data.sales.length >= 1);
+        const cashier = await h.user('CASHIER', ['sales.create']);
+        assert.equal((await h.get('/api/pos/sales?q=Bilal', cashier)).data.sales.length, 0); // a cashier: own sales only
+        const rc = (await h.get('/api/settings')).data.receipt;
+        assert.deepEqual([rc.thermalBold, rc.thermalSize], [true, 13]);
+        const saved = (await h.put('/api/settings/receipt', { thermalBold: false, thermalSize: 14 })).data;
+        assert.deepEqual([saved.thermalBold, saved.thermalSize], [false, 14]);
+        assert.equal((await h.put('/api/settings/receipt', { thermalSize: 20 })).status, 400);
+    });
+
     await t.test('dashboard Show Details: an owner password opens it; a wrong one is a 400 (not a sign-out)', async () => {
         const manager = await h.user('MANAGER', ['reports.view']);
         assert.equal((await h.post('/api/auth/unlock', { password: 'User@12345' }, manager)).status, 400); // the manager's own password is not the admin's

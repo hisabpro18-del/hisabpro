@@ -11,6 +11,8 @@ const DEFAULTS = {
         // thermal receipt: the invoice-number barcode at the end (off: shops asked for it to go), and a QR code that opens
         // the shop's WhatsApp chat (printed only once Company Profile → WhatsApp number is filled in)
         showBarcode: false, showWhatsappQr: true,
+        // thermal print text: bold (darker on the paper) and its size in px
+        thermalBold: true, thermalSize: 13,
     },
     numbering: {
         invoicePrefix: 'INV-', purchasePrefix: 'PUR-',

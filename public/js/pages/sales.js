@@ -165,14 +165,44 @@ HP.page('/sales-return', {
             box.querySelector('[data-partial]').addEventListener('click', () => submit(false));
             box.querySelector('[data-full]').addEventListener('click', () => submit(true));
         };
+        // search as you type: invoice no., customer name or mobile number, every date
+        let found = [], seq = 0, tm;
+        const drawFound = () => {
+            const box = el.querySelector('[data-found]');
+            const qv = el.querySelector('[data-code]').value.trim();
+            if (!qv || sale) { box.innerHTML = ''; return; }
+            ui.mount(box, found.length ? html`<div class="mt-3 overflow-x-auto rounded-xl border border-line"><table class="tbl" data-nopage><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Status</th><th class="!text-right">Total</th><th></th></tr></thead>
+                <tbody>${found.map(x => html`<tr class="cursor-pointer" data-pickret="${x.id}"><td class="font-semibold">${x.number}</td><td class="whitespace-nowrap text-muted">${fmt.dateTime(x.date)}</td><td>${x.customerName}${x.customerPhone ? html`<div class="text-xs text-muted">${x.customerPhone}</div>` : ''}</td><td>${statusBadge(x.status)}</td><td class="num font-semibold">${fmt.money(x.total)}</td><td class="text-right"><button class="btn btn-sm btn-outline" data-pickret="${x.id}">${icon('rotate')}${t('Return')}</button></td></tr>`)}</tbody></table></div>`
+                : html`<p class="mt-3 text-sm text-muted">${t('No sale matches. Try part of the name, the mobile number or the invoice number.')}</p>`);
+        };
+        const search = async () => {
+            const qv = el.querySelector('[data-code]').value.trim(), n = ++seq;
+            if (qv.length < 2) { found = []; drawFound(); return; }
+            try { const r = await api.get('/api/pos/sales', { q: qv, limit: 30 }); if (n === seq) { found = r.sales; drawFound(); } } catch (e) { ui.fail(e); }
+        };
+        const pickSale = async id => {
+            try { sale = await api.get('/api/pos/sales/' + id); drawSale(); drawFound(); el.querySelector('[data-proc]').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { ui.fail(e); }
+        };
         const lookup = async code => {
             try { sale = await api.get('/api/pos/sales/lookup', { code }); drawSale(); }
             catch (e) { sale = null; drawSale(); ui.fail(e); }
         };
         ui.mount(el, html`${ui.pageHeader({ title: 'Refund & Credit Note', subtitle: 'Look up an invoice, process partial or full returns, and issue credit notes.' })}
-          <div class="card card-pad mb-6"><div class="label">Invoice Lookup</div><form class="flex gap-2" data-look><div class="relative flex-1"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span><input class="input h-11 ps-9" placeholder="Enter Invoice # or Sale ID…" data-code value="${query.invoice || ''}"></div><button class="btn btn-primary h-11">${icon('search')}${t('Search')}</button></form></div>
+          <div class="card card-pad mb-6"><div class="label">${t('Find the sale')}</div><form class="flex gap-2" data-look><div class="relative flex-1"><span class="absolute inset-y-0 start-3 flex items-center text-muted">${icon('search')}</span><input class="input h-11 ps-9" placeholder="${t('Invoice no., customer name or mobile number')}" data-code value="${query.invoice || ''}" autocomplete="off"></div><button class="btn btn-primary h-11">${icon('search')}${t('Search')}</button></form><div data-found></div></div>
           <div data-proc></div><div data-recent>${ui.loading()}</div>`);
-        el.querySelector('[data-look]').addEventListener('submit', e => { e.preventDefault(); const c = el.querySelector('[data-code]').value.trim(); if (c) lookup(c); });
+        el.querySelector('[data-look]').addEventListener('submit', async e => {
+            e.preventDefault();
+            const c = el.querySelector('[data-code]').value.trim();
+            if (!c) return;
+            clearTimeout(tm); await search();
+            // an exact invoice number, or the only match, opens at once; several matches stay in the list to choose from
+            const exact = found.find(x => x.number.toLowerCase() === c.toLowerCase());
+            if (exact || found.length === 1) return pickSale((exact || found[0]).id);
+            if (found.length > 1) return ui.toast(t('Several sales match: choose one from the list.'), 'info');
+            lookup(c); // a sale id, or say plainly that nothing was found
+        });
+        el.querySelector('[data-code]').addEventListener('input', () => { if (sale) { sale = null; drawSale(); } clearTimeout(tm); tm = setTimeout(search, 250); });
+        ui.on(el, 'click', '[data-pickret]', (e, b) => { e.stopPropagation(); pickSale(b.dataset.pickret); });
         ui.on(el, 'click', '[data-cn]', (e, b) => {
             const r = (el._recent || []).find(x => x.id === b.dataset.cn);
             HP.ui.print(html`<div class="receipt w80"><div style="text-align:center;font-weight:700">CREDIT NOTE</div><div style="text-align:center;font-weight:700">${HP.session.tenant.name}</div><hr>

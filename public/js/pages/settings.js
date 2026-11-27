@@ -67,6 +67,8 @@ HP.page('/settings', {
                 ${LAYOUT.map(([k, l, h]) => ui.field({ name: k, label: l, help: h, type: 'switch', value: rc[k], half: true }))}
                 <div class="col-span-12 rounded-xl border border-line px-4 py-3"><div class="text-sm font-medium">QR Code Type</div><div class="mb-2 text-xs text-muted">Payload format when QR Code is enabled</div>
                   <select class="input" name="qrType">${[['STANDARD', 'Standard Link'], ['PAYMENT', 'Payment UPI'], ['TAX', 'Tax Authority Compliant']].map(([v, l]) => html`<option value="${v}" ${v === rc.qrType ? raw('selected') : ''}>${l}</option>`)}</select></div>
+                ${ui.field({ name: 'thermalBold', label: 'Thermal print text', type: 'select', half: true, value: rc.thermalBold === false || String(rc.thermalBold) === '0' ? '0' : '1', options: [['1', 'Bold — darker, easier to read'], ['0', 'Normal (thin)']], help: 'How dark the text comes out on 58 / 80 mm slips' })}
+                ${ui.field({ name: 'thermalSize', label: 'Thermal text size', type: 'select', half: true, value: String(rc.thermalSize || 13), options: [['12', 'Small'], ['13', 'Normal'], ['14', 'Large']] })}
                 ${ui.field({ name: 'bankDetails', label: 'Bank details (printed when "Show Bank Details" is on)', type: 'textarea', rows: 2, value: rc.bankDetails, placeholder: 'Bank, account title, IBAN' })}</div>`)}
               ${subCard('Print Automation', 'Rules for silent printing after save or checkout', html`<div class="grid grid-cols-12 gap-3">
                 ${ui.field({ name: 'autoPrint', label: 'Auto-Print on Save', help: 'Send to printer immediately after invoice is saved', type: 'switch', value: rc.autoPrint, half: true })}
@@ -157,7 +159,7 @@ HP.page('/settings', {
                 if (tab === 'company') {
                     s.company = await api.put('/api/settings/company', { name: v.name, phone: v.phone, whatsapp: v.whatsapp, email: v.email, taxId: v.taxId, address: v.address, logo });
                 } else if (tab === 'receipt') {
-                    const r = { paper: v.paper, width: v.width, template: v.template, brandColor: v.brandColor, font: v.font, qrType: v.qrType, copies: Number(v.copies) || 1, bankDetails: v.bankDetails };
+                    const r = { paper: v.paper, width: v.width, template: v.template, brandColor: v.brandColor, font: v.font, qrType: v.qrType, copies: Number(v.copies) || 1, bankDetails: v.bankDetails, thermalBold: v.thermalBold !== '0', thermalSize: Number(v.thermalSize) || 13 };
                     for (const [k] of LAYOUT) r[k] = v[k];
                     r.autoPrint = v.autoPrint;
                     s.receipt = await api.put('/api/settings/receipt', r);

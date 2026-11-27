@@ -57,6 +57,8 @@ const READ = {
         if (has(b, 'qrType')) o.qrType = oneOf(b.qrType, ['STANDARD', 'PAYMENT', 'TAX'], 'QR Code Type');
         if (has(b, 'copies')) { const n = num(b.copies, 'Default Print Copies', { min: 1, max: 3, allowEmpty: false }); if (!Number.isInteger(n)) throw new HttpError(400, 'Default Print Copies must be 1, 2 or 3.'); o.copies = n; }
         if (has(b, 'bankDetails')) o.bankDetails = str(b.bankDetails, 500);
+        if (has(b, 'thermalBold')) o.thermalBold = bool(b.thermalBold);
+        if (has(b, 'thermalSize')) o.thermalSize = Number(oneOf(String(b.thermalSize), ['12', '13', '14'], 'Thermal text size'));
         return o;
     },
     numbering(b) {

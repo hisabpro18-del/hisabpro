@@ -48,9 +48,10 @@
         // the logo is a block centred with margins: the app's base styles make every <img> a block, so text-align alone
         // left it at the left edge of the paper. Width and height stay automatic, so it is never stretched.
         // (the thermal receipt prints one QR code: the WhatsApp one when the shop has a WhatsApp number, else Scan & Pay)
-        return html`<div class="receipt ${width}" style="padding:4px">
+        const size = thermalSize(r);
+        return html`<div class="receipt ${width}" style="padding:4px;${thermalStyle(r)}">
             ${r.showLogo && c.logo ? html`<img src="${c.logo}" style="display:block;margin:0 auto 4px;width:auto;height:auto;max-height:64px;max-width:70%;object-fit:contain" alt="">` : ''}
-            <div style="text-align:center;font-weight:700;font-size:14px">${shopName}</div>
+            <div style="text-align:center;font-weight:800;font-size:${size + 3}px">${shopName}</div>
             ${c.address ? html`<div style="text-align:center">${c.address}</div>` : ''}${c.phone ? html`<div style="text-align:center">Tel: ${c.phone}</div>` : ''}${r.showTaxId && c.taxId ? html`<div style="text-align:center">NTN: ${c.taxId}</div>` : ''}
             <div style="text-align:center;font-weight:700;margin-top:4px">${title}</div>
             <hr>${r.showCashier ? html`<div style="display:flex;justify-content:space-between"><span>Cashier</span><span>${sale.cashierName || (HP.session && HP.session.name) || ''}</span></div>` : ''}
@@ -60,7 +61,7 @@
             ${r.showCustomer ? html`<div style="display:flex;justify-content:space-between"><span>Customer</span><span>${sale.customerName || 'Walk-in Customer'}</span></div>` : ''}
             ${opts.copyLabel ? html`<div style="text-align:center">${opts.copyLabel}</div>` : ''}
             <hr><div style="display:flex;justify-content:space-between;font-weight:700"><span>Qty | Rate</span><span>Amount</span></div><hr>
-            ${items.map((i, k) => html`<div>${k + 1}. ${i.name}${i.serial ? html` <span>(S/N ${i.serial})</span>` : ''}</div><div style="display:flex;justify-content:space-between;padding-left:10px"><span>${HP.fmt.qty(i.qty)}${i.unitName ? ' ' + i.unitName : ''} | ${m(i.price)}</span><span>${m(i.total)}</span></div>`)}
+            ${items.map((i, k) => html`<div style="font-weight:800;font-size:${size + 1}px;margin-top:2px">${k + 1}. ${i.name}${i.serial ? html` <span style="font-size:${size}px">(S/N ${i.serial})</span>` : ''}</div><div style="display:flex;justify-content:space-between;padding-left:10px"><span>${HP.fmt.qty(i.qty)}${i.unitName ? ' ' + i.unitName : ''} | ${m(i.price)}</span><span>${m(i.total)}</span></div>`)}
             <hr><div style="display:flex;justify-content:space-between"><span>Total Item: ${items.length}</span><span>Total Qty: ${HP.fmt.qty(totalQty)}</span></div><hr>
             <table style="width:100%">${totalsRows(sale, m, savings, r)}</table>
             ${r.amountInWords ? html`<hr><div><b>Amount in Words:</b> ${Calc.words(sale.total)}</div>` : ''}
@@ -93,8 +94,12 @@
             <div style="text-align:center;margin-top:2px">WhatsApp: +${n}</div>`;
     }
 
+    // thermal text: bold and its size from Receipt & POS (old settings without them: bold, 13 px)
+    const thermalSize = r => Math.min(14, Math.max(12, Number(r.thermalSize) || 13));
+    const thermalStyle = r => `font-size:${thermalSize(r)}px;font-weight:${r.thermalBold === false ? 400 : 700}`;
+
     function totalsRows(sale, m, savings, r) {
-        const row = (l, v, b) => html`<tr><td style="${b ? 'font-weight:700' : ''}">${l}</td><td style="text-align:right;${b ? 'font-weight:700' : ''}">${v}</td></tr>`;
+        const row = (l, v, b) => html`<tr><td style="${b ? 'font-weight:800;font-size:1.1em' : ''}">${l}</td><td style="text-align:right;${b ? 'font-weight:800;font-size:1.1em' : ''}">${v}</td></tr>`;
         return html`${row('Bill Amount', m(sale.subtotal))}${Number(sale.discount) ? row('Discount', '-' + m(sale.discount)) : ''}${Number(sale.tax) ? row('Tax', m(sale.tax)) : ''}
           ${row('Net Payable', m(sale.total), true)}${Number(sale.paid) && Number(sale.due) ? row('Paid', m(sale.paid)) : ''}${Number(sale.due) ? row('Due (Udhar)', m(sale.due), true) : ''}
           ${r.showSavings && savings > 0 ? row('You saved', m(savings)) : ''}
@@ -178,21 +183,21 @@
         const vendor = p.partyType === 'VENDOR';
         const shopName = c.name || (HP.session.tenant && HP.session.tenant.name) || '';
         const METHOD = { CASH: 'Cash', BANK: 'Bank', CARD: 'Card', WALLET: 'Wallet', CHEQUE: 'Cheque' };
-        const row = (l, v, b) => html`<div style="display:flex;justify-content:space-between;gap:8px;${b ? 'font-weight:700;font-size:14px' : ''}"><span>${l}</span><span>${v}</span></div>`;
+        const row = (l, v, b) => html`<div style="display:flex;justify-content:space-between;gap:8px;${b ? `font-weight:800;font-size:${thermalSize(r) + 2}px` : ''}"><span>${l}</span><span>${v}</span></div>`;
         const hasBal = p.balance !== null && p.balance !== undefined;
         const balWord = vendor ? 'Payable' : 'Receivable';
-        return html`<div class="receipt ${width}" style="padding:4px">
+        return html`<div class="receipt ${width}" style="padding:4px;${thermalStyle(r)}">
             ${r.showLogo && c.logo ? html`<img src="${c.logo}" style="display:block;margin:0 auto 4px;width:auto;height:auto;max-height:64px;max-width:70%;object-fit:contain" alt="">` : ''}
-            <div style="text-align:center;font-weight:700;font-size:14px">${shopName}</div>
+            <div style="text-align:center;font-weight:800;font-size:${thermalSize(r) + 3}px">${shopName}</div>
             ${c.address ? html`<div style="text-align:center">${c.address}</div>` : ''}${c.phone ? html`<div style="text-align:center">Tel: ${c.phone}</div>` : ''}
-            <div style="text-align:center;font-weight:700;margin-top:4px">${inn ? 'PAYMENT RECEIPT' : 'PAYMENT VOUCHER'}</div><hr>
+            <div style="text-align:center;font-weight:800;margin-top:4px">${inn ? 'PAYMENT RECEIPT' : 'PAYMENT VOUCHER'}</div><hr>
             ${row('Receipt No', html`<b>${p.number}</b>`)}${row('Date', HP.fmt.date(p.date || new Date()))}${row('Time', HP.fmt.time(p.date || new Date()))}
             ${row(vendor ? 'Vendor' : p.partyName ? 'Customer' : inn ? 'Received from' : 'Paid to', p.partyName || (inn ? 'Other income' : 'Other payout'))}${p.partyPhone ? row('Phone', p.partyPhone) : ''}
             ${row('Method', `${METHOD[p.method] || p.method || ''}${p.accountName ? ` (${p.accountName})` : ''}`)}${p.reference ? row('Ref', p.reference) : ''}${p.note ? html`<div>Note: ${p.note}</div>` : ''}<hr>
             ${hasBal ? row(`Previous Balance (${balWord})`, m(p.balanceBefore)) : ''}
             ${row(inn ? 'Payment Received' : 'Payment Paid', m(p.amount), !hasBal)}
             ${hasBal ? html`<hr>${row(`Remaining ${balWord}`, m(p.balance), true)}${p.balance < 0 ? html`<div style="text-align:right">(${vendor ? 'advance paid to vendor' : 'advance from customer'})</div>` : ''}` : ''}
-            <div style="font-size:10px;margin-top:4px">${window.Calc.words(p.amount)}</div><hr>
+            <div style="margin-top:4px">${window.Calc.words(p.amount)}</div><hr>
             <div style="margin-top:24px;border-top:1px solid #000;text-align:center;padding-top:2px">Signature</div>
             <div style="text-align:center;margin-top:6px">${n.footer || 'Thank you!'}</div></div>`;
     }
